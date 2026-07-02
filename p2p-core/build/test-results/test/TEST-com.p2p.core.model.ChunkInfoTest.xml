@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="ChunkInfo Tests" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:33.743Z" hostname="PARTH" time="0.012">
+  <properties/>
+  <testcase name="rejects compressed with zero compressed length" classname="com.p2p.core.model.ChunkInfoTest" time="0.004"/>
+  <testcase name="equals based on index, offset, and length" classname="com.p2p.core.model.ChunkInfoTest" time="0.002"/>
+  <testcase name="uncompressed chunk has ratio 1.0" classname="com.p2p.core.model.ChunkInfoTest" time="0.001"/>
+  <testcase name="rejects zero length" classname="com.p2p.core.model.ChunkInfoTest" time="0.001"/>
+  <testcase name="rejects negative chunk index" classname="com.p2p.core.model.ChunkInfoTest" time="0.002"/>
+  <testcase name="compressed chunk calculates ratio correctly" classname="com.p2p.core.model.ChunkInfoTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

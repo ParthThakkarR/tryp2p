@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="PlatformUtils Tests" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:33.900Z" hostname="PARTH" time="0.005">
+  <properties/>
+  <testcase name="platform string contains OS name" classname="com.p2p.core.util.PlatformUtilsTest" time="0.003"/>
+  <testcase name="on Windows, isWindows returns true" classname="com.p2p.core.util.PlatformUtilsTest" time="0.0"/>
+  <testcase name="getMaxMemory returns positive value" classname="com.p2p.core.util.PlatformUtilsTest" time="0.0"/>
+  <testcase name="getCurrentOS returns non-null" classname="com.p2p.core.util.PlatformUtilsTest" time="0.0"/>
+  <testcase name="getAvailableProcessors returns positive value" classname="com.p2p.core.util.PlatformUtilsTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

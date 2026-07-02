@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="Crypto Layer Tests" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:35.076Z" hostname="PARTH" time="0.265">
+  <properties/>
+  <testcase name="ECDH key exchange derives identical shared secrets" classname="com.p2p.crypto.CryptoTest" time="0.114"/>
+  <testcase name="Public key fingerprint is consistent" classname="com.p2p.crypto.CryptoTest" time="0.006"/>
+  <testcase name="Different chunk indices produce different ciphertexts" classname="com.p2p.crypto.CryptoTest" time="0.014"/>
+  <testcase name="AES-GCM detects tampering" classname="com.p2p.crypto.CryptoTest" time="0.007"/>
+  <testcase name="Wrong chunk index fails decryption" classname="com.p2p.crypto.CryptoTest" time="0.007"/>
+  <testcase name="Nonce construction produces 12-byte nonces" classname="com.p2p.crypto.CryptoTest" time="0.001"/>
+  <testcase name="Different key pairs produce different shared secrets" classname="com.p2p.crypto.CryptoTest" time="0.007"/>
+  <testcase name="Destroyed service rejects operations" classname="com.p2p.crypto.CryptoTest" time="0.006"/>
+  <testcase name="Large chunk encryption/decryption" classname="com.p2p.crypto.CryptoTest" time="0.074"/>
+  <testcase name="AES-256-GCM encrypt/decrypt round-trip" classname="com.p2p.crypto.CryptoTest" time="0.005"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

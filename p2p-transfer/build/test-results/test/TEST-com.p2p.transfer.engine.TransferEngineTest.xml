@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="Transfer Engine Tests" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:37.128Z" hostname="PARTH" time="0.136">
+  <properties/>
+  <testcase name="compression estimation detects compressible data" classname="com.p2p.transfer.engine.TransferEngineTest" time="0.065"/>
+  <testcase name="prepare and process chunk pipeline" classname="com.p2p.transfer.engine.TransferEngineTest" time="0.017"/>
+  <testcase name="createMetadata computes correct values for file" classname="com.p2p.transfer.engine.TransferEngineTest" time="0.005"/>
+  <testcase name="createMetadata identifies directories" classname="com.p2p.transfer.engine.TransferEngineTest" time="0.003"/>
+  <testcase name="chunked read and write round-trip" classname="com.p2p.transfer.engine.TransferEngineTest" time="0.008"/>
+  <testcase name="directory scanning finds all entries" classname="com.p2p.transfer.engine.TransferEngineTest" time="0.01"/>
+  <testcase name="compression round-trip is lossless" classname="com.p2p.transfer.engine.TransferEngineTest" time="0.002"/>
+  <testcase name="writer detects hash mismatch" classname="com.p2p.transfer.engine.TransferEngineTest" time="0.004"/>
+  <system-out><![CDATA[10:38:37.220 [Test worker] INFO com.p2p.transfer.engine.ChunkedFileWriter -- Transfer complete: C:\Users\parth\AppData\Local\Temp\junit-745028732360860330\pipeline-out.txt
+10:38:37.243 [Test worker] INFO com.p2p.transfer.engine.ChunkedFileWriter -- Transfer complete: C:\Users\parth\AppData\Local\Temp\junit-7063758614211595542\dest.bin
+10:38:37.262 [Test worker] WARN com.p2p.transfer.engine.ChunkedFileWriter -- Chunk 0 hash mismatch: expected=badhash, actual=5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

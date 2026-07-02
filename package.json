@@ -1,0 +1,6 @@
+{
+  "name": "p2p-file-transfer",
+  "version": "1.0.0-SNAPSHOT",
+  "description": "Cross-platform P2P File Transfer System",
+  "main": "com.p2p.app.P2PApplication"
+}

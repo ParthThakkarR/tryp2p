@@ -1,0 +1,102 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+      - name: Build & test
+        run: ./gradlew build test --no-daemon
+
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+      - name: Install 7-Zip (for portable SFX EXE)
+        shell: powershell
+        run: choco install 7zip -y
+      - name: Build portable EXE
+        shell: powershell
+        run: ./gradlew :p2p-app:packageWinPortable --no-daemon
+      - name: Upload portable EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: P2PTransfer-Windows-Portable
+          path: p2p-app/build/dist-portable/*.exe
+
+  build-macos:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+      - name: Build DMG
+        run: ./gradlew :p2p-app:packageMacDmg --no-daemon
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: P2PTransfer-macOS-DMG
+          path: p2p-app/build/dist-mac-dmg/*.dmg
+
+  build-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+      - name: Build app-image (portable directory)
+        run: ./gradlew :p2p-app:packageLinuxApp --no-daemon
+      - name: Tar app-image
+        run: tar czf p2p-app/build/dist-linux-app/P2PTransfer-Linux.tar.gz -C p2p-app/build/dist-linux-app P2PTransfer
+      - name: Build DEB
+        run: ./gradlew :p2p-app:packageLinuxDeb --no-daemon
+      - name: Upload Linux tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: P2PTransfer-Linux-Portable
+          path: p2p-app/build/dist-linux-app/P2PTransfer-Linux.tar.gz
+      - name: Upload DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: P2PTransfer-Linux-DEB
+          path: p2p-app/build/dist-linux-deb/*.deb
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            P2PTransfer-Windows-Portable/*.exe
+            P2PTransfer-macOS-DMG/*.dmg
+            P2PTransfer-Linux-Portable/*.tar.gz
+            P2PTransfer-Linux-DEB/*.deb

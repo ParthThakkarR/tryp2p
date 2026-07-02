@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="PeerId Tests" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:33.769Z" hostname="PARTH" time="0.019">
+  <properties/>
+  <testcase name="fromBytes() rejects invalid length" classname="com.p2p.core.model.PeerIdTest" time="0.003"/>
+  <testcase name="toString() includes hex representation" classname="com.p2p.core.model.PeerIdTest" time="0.001"/>
+  <testcase name="fromBytes() round-trips correctly" classname="com.p2p.core.model.PeerIdTest" time="0.001"/>
+  <testcase name="equals() and hashCode() contract" classname="com.p2p.core.model.PeerIdTest" time="0.001"/>
+  <testcase name="toShortString() returns first 8 hex chars" classname="com.p2p.core.model.PeerIdTest" time="0.002"/>
+  <testcase name="fromHex() round-trips correctly" classname="com.p2p.core.model.PeerIdTest" time="0.0"/>
+  <testcase name="toBytes() returns defensive copy" classname="com.p2p.core.model.PeerIdTest" time="0.001"/>
+  <testcase name="generate() creates unique IDs" classname="com.p2p.core.model.PeerIdTest" time="0.001"/>
+  <testcase name="toHex() returns 32-char lowercase hex string" classname="com.p2p.core.model.PeerIdTest" time="0.001"/>
+  <testcase name="compareTo() provides consistent ordering" classname="com.p2p.core.model.PeerIdTest" time="0.001"/>
+  <testcase name="fromHex() rejects invalid input" classname="com.p2p.core.model.PeerIdTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

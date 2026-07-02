@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="MessageReader/Writer Tests" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:36.233Z" hostname="PARTH" time="0.04">
+  <properties/>
+  <testcase name="heartbeat frames are silently filtered out" classname="com.p2p.network.protocol.MessageReaderWriterTest" time="0.036"/>
+  <testcase name="reader throws on corrupt magic bytes" classname="com.p2p.network.protocol.MessageReaderWriterTest" time="0.001"/>
+  <testcase name="reader returns null on empty stream" classname="com.p2p.network.protocol.MessageReaderWriterTest" time="0.001"/>
+  <testcase name="write then read round-trips correctly" classname="com.p2p.network.protocol.MessageReaderWriterTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

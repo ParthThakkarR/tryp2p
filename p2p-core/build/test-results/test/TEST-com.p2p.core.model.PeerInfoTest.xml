@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="PeerInfo Tests" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:33.789Z" hostname="PARTH" time="0.01">
+  <properties/>
+  <testcase name="builder rejects invalid port" classname="com.p2p.core.model.PeerInfoTest" time="0.003"/>
+  <testcase name="builder creates valid PeerInfo" classname="com.p2p.core.model.PeerInfoTest" time="0.001"/>
+  <testcase name="builder rejects null required fields" classname="com.p2p.core.model.PeerInfoTest" time="0.001"/>
+  <testcase name="toString() contains key info" classname="com.p2p.core.model.PeerInfoTest" time="0.001"/>
+  <testcase name="equals() based on PeerId only" classname="com.p2p.core.model.PeerInfoTest" time="0.001"/>
+  <testcase name="withRefreshed() updates lastSeen and status" classname="com.p2p.core.model.PeerInfoTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

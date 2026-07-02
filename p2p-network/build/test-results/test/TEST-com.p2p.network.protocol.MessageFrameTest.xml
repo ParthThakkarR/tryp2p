@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="MessageFrame Tests" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:36.162Z" hostname="PARTH" time="0.069">
+<testsuite name="MessageFrame Tests" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:41:44.869Z" hostname="PARTH" time="0.071">
   <properties/>
-  <testcase name="rejects frame that is too small" classname="com.p2p.network.protocol.MessageFrameTest" time="0.026"/>
-  <testcase name="rejects frame with unsupported version" classname="com.p2p.network.protocol.MessageFrameTest" time="0.001"/>
-  <testcase name="getData returns defensive copy" classname="com.p2p.network.protocol.MessageFrameTest" time="0.002"/>
-  <testcase name="empty payload round-trips correctly" classname="com.p2p.network.protocol.MessageFrameTest" time="0.002"/>
+  <testcase name="rejects frame that is too small" classname="com.p2p.network.protocol.MessageFrameTest" time="0.024"/>
+  <testcase name="rejects frame with unsupported version" classname="com.p2p.network.protocol.MessageFrameTest" time="0.002"/>
+  <testcase name="getData returns defensive copy" classname="com.p2p.network.protocol.MessageFrameTest" time="0.001"/>
+  <testcase name="empty payload round-trips correctly" classname="com.p2p.network.protocol.MessageFrameTest" time="0.001"/>
   <testcase name="rejects frame with invalid magic bytes" classname="com.p2p.network.protocol.MessageFrameTest" time="0.001"/>
-  <testcase name="rejects payload exceeding maximum size" classname="com.p2p.network.protocol.MessageFrameTest" time="0.01"/>
+  <testcase name="rejects payload exceeding maximum size" classname="com.p2p.network.protocol.MessageFrameTest" time="0.014"/>
   <testcase name="getWireSize is consistent with toBytes length" classname="com.p2p.network.protocol.MessageFrameTest" time="0.001"/>
-  <testcase name="rejects null input" classname="com.p2p.network.protocol.MessageFrameTest" time="0.001"/>
-  <testcase name="round-trip serialization works for all message types" classname="com.p2p.network.protocol.MessageFrameTest" time="0.002"/>
+  <testcase name="rejects null input" classname="com.p2p.network.protocol.MessageFrameTest" time="0.002"/>
+  <testcase name="round-trip serialization works for all message types" classname="com.p2p.network.protocol.MessageFrameTest" time="0.003"/>
   <testcase name="factory methods create correct types" classname="com.p2p.network.protocol.MessageFrameTest" time="0.001"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>

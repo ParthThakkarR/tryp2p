@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="EventBus Tests" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:33.595Z" hostname="PARTH" time="0.145">
+<testsuite name="EventBus Tests" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:41:41.769Z" hostname="PARTH" time="0.11">
   <properties/>
-  <testcase name="publishSync delivers to subscribed listeners" classname="com.p2p.core.event.EventBusTest" time="0.096"/>
+  <testcase name="publishSync delivers to subscribed listeners" classname="com.p2p.core.event.EventBusTest" time="0.07"/>
   <testcase name="event carries timestamp and correlationId" classname="com.p2p.core.event.EventBusTest" time="0.001"/>
-  <testcase name="listener exception does not affect other listeners" classname="com.p2p.core.event.EventBusTest" time="0.013"/>
+  <testcase name="listener exception does not affect other listeners" classname="com.p2p.core.event.EventBusTest" time="0.008"/>
   <testcase name="clear() removes all listeners" classname="com.p2p.core.event.EventBusTest" time="0.002"/>
-  <testcase name="unsubscribe stops delivery" classname="com.p2p.core.event.EventBusTest" time="0.003"/>
-  <testcase name="async publish delivers event" classname="com.p2p.core.event.EventBusTest" time="0.007"/>
-  <testcase name="listeners only receive matching event types" classname="com.p2p.core.event.EventBusTest" time="0.001"/>
-  <system-out><![CDATA[10:38:33.683 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
-10:38:33.712 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
-10:38:33.712 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
-10:38:33.713 [Test worker] ERROR com.p2p.core.event.EventBus -- Error in event listener for TestEventA: intentional failure
+  <testcase name="unsubscribe stops delivery" classname="com.p2p.core.event.EventBusTest" time="0.001"/>
+  <testcase name="async publish delivers event" classname="com.p2p.core.event.EventBusTest" time="0.006"/>
+  <testcase name="listeners only receive matching event types" classname="com.p2p.core.event.EventBusTest" time="0.002"/>
+  <system-out><![CDATA[11:11:41.837 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
+11:11:41.859 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
+11:11:41.859 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
+11:11:41.860 [Test worker] ERROR com.p2p.core.event.EventBus -- Error in event listener for TestEventA: intentional failure
 java.lang.RuntimeException: intentional failure
 	at com.p2p.core.event.EventBusTest.lambda$listenerExceptionIsolation$0(EventBusTest.java:99)
 	at com.p2p.core.event.EventBus.publishSync(EventBus.java:111)
@@ -102,11 +102,11 @@ java.lang.RuntimeException: intentional failure
 	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
 	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
 	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
-10:38:33.726 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
-10:38:33.730 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
-10:38:33.733 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
-10:38:33.741 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
-10:38:33.741 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventB
+11:11:41.868 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
+11:11:41.871 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
+11:11:41.872 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
+11:11:41.878 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventA
+11:11:41.880 [Test worker] DEBUG com.p2p.core.event.EventBus -- Subscribed listener for event type: TestEventB
 ]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>

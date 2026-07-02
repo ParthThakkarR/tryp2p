@@ -12,8 +12,10 @@ p2p/
 ├── p2p-transfer/                     # Transfer engine, chunking, compression, resume
 ├── p2p-security/                     # Rate limiting, cert pinning, auth logging, firewall
 ├── p2p-observability/                # Metrics, structured logging, health, audit
+├── p2p-relay/                        # STUN, NAT traversal, global registry client, relay
 ├── p2p-cli/                          # CLI interface (picocli)
-└── p2p-app/                          # Application bootstrap, DI wiring
+├── p2p-app/                          # Application bootstrap, DI wiring
+└── registry-server/                  # Docker setup for registry & relay servers
 ```
 
 ## Module Dependency Graph
@@ -22,6 +24,7 @@ p2p-core → p2p-network → p2p-transfer → p2p-cli → p2p-app
 p2p-core → p2p-crypto  → p2p-transfer
 p2p-core → p2p-crypto  → p2p-security → p2p-cli
 p2p-core → p2p-observability → p2p-cli
+p2p-core → p2p-network  → p2p-relay → p2p-cli
 ```
 
 ## Build & Test Commands
@@ -65,7 +68,7 @@ java -jar p2p-app/build/libs/p2p-1.0.0-SNAPSHOT.jar --gui
 - **JDK**: 26.0.1 (Oracle)
 - **Gradle**: 9.6.1 (bundles Kotlin 2.1+ — supports Java 26)
 - **Shadow plugin**: 9.4.3 (id: `com.gradleup.shadow`)
-- **All 8 modules compile**: p2p-core, p2p-crypto, p2p-network, p2p-observability, p2p-security, p2p-transfer, p2p-cli, p2p-app
+- **All 9 modules compile**: p2p-core, p2p-crypto, p2p-network, p2p-observability, p2p-security, p2p-transfer, p2p-relay, p2p-cli, p2p-app
 - **All tests pass**: p2p-core (70 tests), p2p-crypto (10 tests), p2p-network (17 tests), p2p-transfer (8 tests) — all green
 
 ## Key Packages
@@ -236,6 +239,17 @@ RateLimiter(int maxRequestsPerMinute, Duration blockDuration, Path dataDir)
   .isBlocked(String peerId) → boolean
   .blockPeer(String peerId)  .unblockPeer(String peerId)
 ```
+
+### p2p-relay
+- `com.p2p.relay` — StunClient (RFC 8489), RegistryClient (HTTP), NatTraversalService, RegistryServer (standalone), RelayServer, RelayClient
+
+## Global Connectivity
+1. **LAN**: UDP multicast discovery (239.255.80.50:9876)
+2. **Internet**: STUN + registry → direct TCP → hole punch → relay fallback
+3. **Registry**: HTTP REST API, peers register public IP:port, Docker deployable
+4. **STUN**: Google's stun.l.google.com:19302 for public address discovery
+5. **Relay**: Simple TCP stream bridge for when NAT traversal fails
+6. **CLI `send`**: Falls back from LAN discovery → registry lookup by name/IP
 
 ## Key Design Decisions
 - Java 21+ virtual threads for concurrency

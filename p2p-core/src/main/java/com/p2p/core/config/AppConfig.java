@@ -31,6 +31,10 @@ public final class AppConfig {
     public static final int DEFAULT_RESUME_EXPIRY_DAYS = 7;
     public static final int DEFAULT_AUDIT_RETENTION_DAYS = 90;
     public static final int DEFAULT_METRICS_PORT = 9090;
+    public static final String DEFAULT_REGISTRY_URL = "https://registry.p2ptransfer.io";
+    public static final String DEFAULT_RELAY_HOST = "relay.p2ptransfer.io";
+    public static final int DEFAULT_RELAY_PORT = 9878;
+    public static final boolean DEFAULT_ENABLE_GLOBAL_DISCOVERY = true;
 
     // --- Fields ---
     private final int tcpPort;
@@ -58,6 +62,10 @@ public final class AppConfig {
     private final boolean encryptionEnabled;
     private final boolean metricsEnabled;
     private final String displayName;
+    private final String registryUrl;
+    private final String relayHost;
+    private final int relayPort;
+    private final boolean enableGlobalDiscovery;
 
     private AppConfig(Builder builder) {
         this.tcpPort = builder.tcpPort;
@@ -85,6 +93,10 @@ public final class AppConfig {
         this.encryptionEnabled = builder.encryptionEnabled;
         this.metricsEnabled = builder.metricsEnabled;
         this.displayName = builder.displayName;
+        this.registryUrl = builder.registryUrl;
+        this.relayHost = builder.relayHost;
+        this.relayPort = builder.relayPort;
+        this.enableGlobalDiscovery = builder.enableGlobalDiscovery;
     }
 
     // --- Getters ---
@@ -114,6 +126,10 @@ public final class AppConfig {
     public boolean isEncryptionEnabled() { return encryptionEnabled; }
     public boolean isMetricsEnabled() { return metricsEnabled; }
     public String getDisplayName() { return displayName; }
+    public String getRegistryUrl() { return registryUrl; }
+    public String getRelayHost() { return relayHost; }
+    public int getRelayPort() { return relayPort; }
+    public boolean isEnableGlobalDiscovery() { return enableGlobalDiscovery; }
 
     /**
      * Returns the maximum bytes allowed in-flight for transfers.
@@ -174,6 +190,10 @@ public final class AppConfig {
         private boolean encryptionEnabled = true;
         private boolean metricsEnabled = false;
         private String displayName = System.getProperty("user.name", "peer");
+        private String registryUrl = DEFAULT_REGISTRY_URL;
+        private String relayHost = DEFAULT_RELAY_HOST;
+        private int relayPort = DEFAULT_RELAY_PORT;
+        private boolean enableGlobalDiscovery = DEFAULT_ENABLE_GLOBAL_DISCOVERY;
 
         public Builder tcpPort(int port) { this.tcpPort = port; return this; }
         public Builder discoveryPort(int port) { this.discoveryPort = port; return this; }
@@ -200,6 +220,10 @@ public final class AppConfig {
         public Builder encryptionEnabled(boolean e) { this.encryptionEnabled = e; return this; }
         public Builder metricsEnabled(boolean e) { this.metricsEnabled = e; return this; }
         public Builder displayName(String name) { this.displayName = name; return this; }
+        public Builder registryUrl(String url) { this.registryUrl = url; return this; }
+        public Builder relayHost(String host) { this.relayHost = host; return this; }
+        public Builder relayPort(int port) { this.relayPort = port; return this; }
+        public Builder enableGlobalDiscovery(boolean e) { this.enableGlobalDiscovery = e; return this; }
 
         public AppConfig build() {
             return new AppConfig(this);

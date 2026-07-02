@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="PayloadBuilder/Reader Tests" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:36.273Z" hostname="PARTH" time="0.006">
+<testsuite name="PayloadBuilder/Reader Tests" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:41:44.983Z" hostname="PARTH" time="0.014">
   <properties/>
-  <testcase name="handles unicode strings" classname="com.p2p.network.protocol.PayloadBuilderReaderTest" time="0.002"/>
+  <testcase name="handles unicode strings" classname="com.p2p.network.protocol.PayloadBuilderReaderTest" time="0.011"/>
   <testcase name="auto-grows buffer for large payloads" classname="com.p2p.network.protocol.PayloadBuilderReaderTest" time="0.001"/>
-  <testcase name="round-trip all field types" classname="com.p2p.network.protocol.PayloadBuilderReaderTest" time="0.001"/>
-  <testcase name="handles null values gracefully" classname="com.p2p.network.protocol.PayloadBuilderReaderTest" time="0.001"/>
+  <testcase name="round-trip all field types" classname="com.p2p.network.protocol.PayloadBuilderReaderTest" time="0.002"/>
+  <testcase name="handles null values gracefully" classname="com.p2p.network.protocol.PayloadBuilderReaderTest" time="0.0"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>

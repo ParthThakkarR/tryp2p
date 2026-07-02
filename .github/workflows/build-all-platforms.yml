@@ -8,6 +8,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  REGISTRY_IMAGE: ghcr.io/${{ github.repository }}/registry-server
+  RELAY_IMAGE: ghcr.io/${{ github.repository }}/relay-server
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -67,7 +71,7 @@ jobs:
         with:
           java-version: 21
           distribution: temurin
-      - name: Build app-image (portable directory)
+      - name: Build app-image
         run: ./gradlew :p2p-app:packageLinuxApp --no-daemon
       - name: Tar app-image
         run: tar czf p2p-app/build/dist-linux-app/P2PTransfer-Linux.tar.gz -C p2p-app/build/dist-linux-app P2PTransfer
@@ -84,6 +88,42 @@ jobs:
           name: P2PTransfer-Linux-DEB
           path: p2p-app/build/dist-linux-deb/*.deb
 
+  build-docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+      - name: Build JARs
+        run: ./gradlew :p2p-relay:jar :p2p-core:jar :p2p-network:jar :p2p-crypto:jar --no-daemon
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push registry server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: registry-server/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY_IMAGE }}:${{ github.ref_name }},${{ env.REGISTRY_IMAGE }}:latest
+      - name: Build and push relay server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: registry-server/Dockerfile.relay
+          push: true
+          tags: ${{ env.RELAY_IMAGE }}:${{ github.ref_name }},${{ env.RELAY_IMAGE }}:latest
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-windows, build-macos, build-linux]
@@ -95,6 +135,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
           files: |
             P2PTransfer-Windows-Portable/*.exe
             P2PTransfer-macOS-DMG/*.dmg

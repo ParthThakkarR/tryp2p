@@ -1,5 +1,5 @@
 <?xml version="1.0" ?>
-<Wix xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util" xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Fragment>
     <ComponentGroup Id="FileAssociations"></ComponentGroup>
     <DirectoryRef Id="dir067f834bb66033e3860026f1f5b758e8">

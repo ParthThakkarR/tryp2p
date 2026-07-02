@@ -43,6 +43,10 @@ import com.p2p.transfer.engine.DirectoryScanner;
 import com.p2p.transfer.engine.ParallelTransferEngine;
 import com.p2p.transfer.resume.TransferResumeManager;
 import com.p2p.core.service.CompressionService;
+import com.p2p.relay.NatTraversalService;
+import com.p2p.relay.RegistryClient;
+import com.p2p.relay.StunClient;
+import com.p2p.relay.RelayClient;
 
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -136,6 +140,10 @@ public class P2PCli implements Callable<Integer> {
     /** Multicast-based LAN peer discovery service (239.255.80.50:9876). */
     public static MulticastDiscoveryService discovery;
 
+    public static RegistryClient registryClient;
+
+    public static NatTraversalService natTraversal;
+
     /** Manages TCP connections with heartbeats and reconnection. */
     public static ConnectionManager connectionManager;
 
@@ -225,6 +233,17 @@ public class P2PCli implements Callable<Integer> {
             discovery = new MulticastDiscoveryService(config, localPeerId);
             discovery.start();
 
+            if (config.isEnableGlobalDiscovery()) {
+                var rc = new RegistryClient(config.getRegistryUrl());
+                registryClient = rc;
+                natTraversal = new NatTraversalService(rc);
+                natTraversal.start(
+                    localPeerId.toHex(),
+                    config.getDisplayName(),
+                    config.getTcpPort()
+                );
+            }
+
             Runtime.getRuntime().addShutdownHook(new Thread(P2PCli::shutdown));
 
         } catch (Exception e) {
@@ -244,6 +263,7 @@ public class P2PCli implements Callable<Integer> {
     public static void shutdown() {
         try {
             if (discovery != null) discovery.stop();
+            if (natTraversal != null) natTraversal.close();
             if (connectionManager != null) connectionManager.stop();
             if (tcpServer != null) tcpServer.stop();
             if (keyRotation != null) keyRotation.close();
@@ -630,6 +650,13 @@ public class P2PCli implements Callable<Integer> {
                         peer.getStatus(),
                         peer.getOperatingSystem());
             }
+            if (natTraversal != null) {
+                var stun = natTraversal.getPublicAddress();
+                if (stun != null && stun.success()) {
+                    System.out.println();
+                    System.out.println("Public Address: " + stun.publicIp() + ":" + stun.publicPort() + " (NAT: " + stun.natType() + ")");
+                }
+            }
             return 0;
         }
     }
@@ -686,6 +713,18 @@ public class P2PCli implements Callable<Integer> {
                             }
                         }
                     } catch (Exception ignored) {}
+                }
+                if (target.isEmpty() && registryClient != null) {
+                    target = registryClient.findPeer(peer);
+                    if (target.isEmpty()) {
+                        for (var p : registryClient.listPeers()) {
+                            if (p.getDisplayName().toLowerCase().contains(peer.toLowerCase()) ||
+                                p.getAddress().getHostAddress().equals(peer)) {
+                                target = Optional.of(p);
+                                break;
+                            }
+                        }
+                    }
                 }
                 if (target.isEmpty()) {
                     System.err.println("Peer not found: " + peer);

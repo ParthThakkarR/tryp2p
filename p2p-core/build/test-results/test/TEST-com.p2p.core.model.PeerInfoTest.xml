@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="PeerInfo Tests" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:08:33.789Z" hostname="PARTH" time="0.01">
+<testsuite name="PeerInfo Tests" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:41:41.934Z" hostname="PARTH" time="0.01">
   <properties/>
   <testcase name="builder rejects invalid port" classname="com.p2p.core.model.PeerInfoTest" time="0.003"/>
   <testcase name="builder creates valid PeerInfo" classname="com.p2p.core.model.PeerInfoTest" time="0.001"/>

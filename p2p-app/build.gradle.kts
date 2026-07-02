@@ -16,6 +16,7 @@ dependencies {
     implementation(project(":p2p-transfer"))
     implementation(project(":p2p-security"))
     implementation(project(":p2p-observability"))
+    implementation(project(":p2p-relay"))
     implementation(project(":p2p-cli"))
     implementation(rootProject.libs.bundles.logging)
 }
@@ -226,7 +227,7 @@ Directory="%%T\\P2PTransfer"
         // Step 1: Create plain 7z archive (no SFX, no config inside)
         val archive7z = File(tmpDir, "archive.7z")
         var pb = ProcessBuilder(
-            "7z", "a", "-mx9",
+            "7z", "a", "-mx3", "-mmt2",
             archive7z.absolutePath,
             appDir.absolutePath + "\\*"
         )

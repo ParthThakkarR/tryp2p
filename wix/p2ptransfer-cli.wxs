@@ -2,16 +2,16 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="p2ptransfer CLI" Language="1033"
            Version="0.1.0" Manufacturer="p2ptransfer"
-           UpgradeCode="P2PTRANSFER-CLI-UPGRADE-0000-0000-000000000000">
-    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
+           UpgradeCode="12345678-1234-1234-1234-1234567890AB">
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" Platform="x64" />
 
     <Media Id="1" Cabinet="p2ptransfer.cab" EmbedCab="yes" />
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLDIR" Name="p2ptransfer">
-          <Component Id="MainBinary" Guid="P2PTRANSFER-MAIN-BIN-0000-0000-000000000000">
-            <File Id="p2ptransferExe" Name="p2ptransfer.exe"
-                  Source="$(var.P2P_TARGET_DIR)/release/p2ptransfer.exe"
+          <Component Id="MainBinary" Guid="12345678-1234-1234-1234-1234567890AC" Win64="yes">
+            <File Id="p2pExe" Name="p2p.exe"
+                  Source="$(var.P2P_TARGET_DIR)\release\p2p.exe"
                   KeyPath="yes" />
             <Environment Id="PATH" Action="set" Part="last" Name="PATH"
                          Value="[INSTALLDIR]" System="yes" />
@@ -24,7 +24,7 @@
       <ComponentRef Id="MainBinary" />
     </Feature>
 
-    <Icon Id="app.ico" SourceFile="$(var.P2P_SRC_DIR)/desktop/p2ptransfer-gui/src-tauri/icons/icon.ico" />
+    <Icon Id="app.ico" SourceFile="$(var.P2P_SRC_DIR)\desktop\p2ptransfer-gui\src-tauri\icons\icon.ico" />
     <Property Id="ARPPRODUCTICON" Value="app.ico" />
     <UIRef Id="WixUI_Minimal" />
   </Product>

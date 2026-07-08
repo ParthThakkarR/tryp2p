@@ -46,7 +46,7 @@ jobs:
           path: target/${{ matrix.target }}/release/p2p${{ matrix.ext }}
 
   build-gui-windows:
-    name: Build GUI (Windows)
+    name: Build GUI + Windows packages
     runs-on: windows-latest
     defaults:
       run:
@@ -73,25 +73,135 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build Tauri GUI
+      - name: Build Tauri GUI (produces exe + MSI + NSIS)
         run: npm run tauri build
 
-      - name: Upload GUI artifact
+      - name: Upload GUI exe
         uses: actions/upload-artifact@v4
         with:
           name: p2ptransfer-gui-windows
           path: target/release/p2ptransfer-gui.exe
 
-  release:
+      - name: Upload Tauri MSI installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2ptransfer-msi-windows
+          path: target/release/bundle/msi/p2ptransfer_*.msi
+
+      - name: Upload Tauri NSIS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2ptransfer-nsis-windows
+          path: target/release/bundle/nsis/p2ptransfer_*-setup.exe
+
+  package-windows:
+    name: Package Windows portable ZIP
+    runs-on: windows-latest
     needs: [build-cli, build-gui-windows]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download CLI (Windows)
+        uses: actions/download-artifact@v4
+        with:
+          name: p2p-x86_64-pc-windows-msvc
+          path: staging
+
+      - name: Download GUI exe
+        uses: actions/download-artifact@v4
+        with:
+          name: p2ptransfer-gui-windows
+          path: staging
+
+      - name: Download MSI
+        uses: actions/download-artifact@v4
+        with:
+          name: p2ptransfer-msi-windows
+          path: staging
+
+      - name: Download NSIS
+        uses: actions/download-artifact@v4
+        with:
+          name: p2ptransfer-nsis-windows
+          path: staging
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          # Determine version from tag
+          $version = "${{ github.ref_name }}"
+          if ($version.StartsWith("v")) { $version = $version.Substring(1) }
+          $stagingName = "p2ptransfer-portable-v${version}-windows-x86_64"
+          $zipDir = "portable-zip"
+          New-Item -ItemType Directory -Path $zipDir -Force | Out-Null
+
+          # Copy CLI
+          if (Test-Path "staging/p2p.exe") {
+            Copy-Item "staging/p2p.exe" -Destination "$zipDir/p2p.exe"
+          }
+
+          # Copy GUI
+          if (Test-Path "staging/p2ptransfer-gui.exe") {
+            Copy-Item "staging/p2ptransfer-gui.exe" -Destination "$zipDir/p2ptransfer-gui.exe"
+          }
+
+          # Check for WebView2Loader.dll in Tauri build output
+          $wvDll = "desktop/p2ptransfer-gui/src-tauri/target/release/WebView2Loader.dll"
+          if (Test-Path "staging/p2ptransfer_${{ github.ref_name }}_x64-setup.exe") {
+            # NSIS installer exists — it bundles WebView2 bootstrapper, no standalone DLL needed
+            Write-Host "NSIS installer available (includes WebView2 bootstrapper)"
+          }
+
+          # README
+          @"
+        p2ptransfer v$version — Portable Windows Release
+        ===================================================
+
+        USAGE:
+          p2p.exe listen                   Receive files (shows your address)
+          p2p.exe send <file> <ip>:9877    Send a file to a peer
+
+        EXAMPLES:
+          Terminal 1 (receiver):
+            p2p.exe listen --output D:\Downloads
+
+          Terminal 2 (sender):
+            p2p.exe send D:\photo.jpg 192.168.1.100:9877
+
+        GUI:
+          Double-click p2ptransfer-gui.exe for the graphical interface.
+
+        For more help:
+          p2p.exe --help
+        "@ | Set-Content -Path "$zipDir/README.txt" -Encoding ASCII
+
+          # Create ZIP
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zipPath = "${stagingName}.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory((Resolve-Path $zipDir), (Resolve-Path $zipPath))
+          Write-Host "Created $zipPath"
+
+          # Upload as artifact
+          Write-Host "zipPath=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2ptransfer-portable-windows
+          path: ${{ env.zipPath }}
+
+  release:
+    needs: [build-cli, build-gui-windows, package-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - uses: actions/download-artifact@v4
 
-      - name: Display artifacts structure
-        run: find . -type f
+      - name: List all artifacts
+        run: find . -type f | sort
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -102,3 +212,6 @@ jobs:
             p2p-x86_64-unknown-linux-gnu/p2p
             p2p-x86_64-apple-darwin/p2p
             p2ptransfer-gui-windows/p2ptransfer-gui.exe
+            p2ptransfer-msi-windows/p2ptransfer_*.msi
+            p2ptransfer-nsis-windows/p2ptransfer_*-setup.exe
+            p2ptransfer-portable-windows/*.zip

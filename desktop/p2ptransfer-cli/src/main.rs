@@ -205,7 +205,32 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::WARN.into()))
         .init();
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // If no args on Windows (double-click from Explorer), pause so they can read
+            let is_windows = cfg!(target_os = "windows");
+            let no_args = std::env::args().len() <= 1;
+            if is_windows && no_args {
+                println!();
+                println!("  ╔═══════════════════════════════════════════════╗");
+                println!("  ║           p2ptransfer - P2P File Transfer    ║");
+                println!("  ╚═══════════════════════════════════════════════╝");
+                println!();
+                println!("  Run from a terminal (cmd/powershell):");
+                println!("    p2p send <file> <ip:port>    Send a file");
+                println!("    p2p listen                   Receive files");
+                println!("    p2p list                     Discover peers");
+                println!("    p2p --help                   All commands");
+                println!();
+                println!("  Press Enter to exit...");
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                std::process::exit(0);
+            }
+            e.exit();
+        }
+    };
 
     let config_path = cli.config.clone().unwrap_or_else(get_default_config_path);
     let config = if config_path.exists() {

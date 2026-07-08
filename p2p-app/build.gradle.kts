@@ -16,7 +16,6 @@ dependencies {
     implementation(project(":p2p-transfer"))
     implementation(project(":p2p-security"))
     implementation(project(":p2p-observability"))
-    implementation(project(":p2p-relay"))
     implementation(project(":p2p-cli"))
     implementation(rootProject.libs.bundles.logging)
 }

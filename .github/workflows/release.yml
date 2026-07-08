@@ -137,21 +137,10 @@ jobs:
           New-Item -ItemType Directory -Path $zipDir -Force | Out-Null
 
           # Copy CLI
-          if (Test-Path "staging/p2p.exe") {
-            Copy-Item "staging/p2p.exe" -Destination "$zipDir/p2p.exe"
-          }
+          Copy-Item "staging/p2p.exe" -Destination "$zipDir/p2p.exe"
 
           # Copy GUI
-          if (Test-Path "staging/p2ptransfer-gui.exe") {
-            Copy-Item "staging/p2ptransfer-gui.exe" -Destination "$zipDir/p2ptransfer-gui.exe"
-          }
-
-          # Check for WebView2Loader.dll in Tauri build output
-          $wvDll = "desktop/p2ptransfer-gui/src-tauri/target/release/WebView2Loader.dll"
-          if (Test-Path "staging/p2ptransfer_${{ github.ref_name }}_x64-setup.exe") {
-            # NSIS installer exists — it bundles WebView2 bootstrapper, no standalone DLL needed
-            Write-Host "NSIS installer available (includes WebView2 bootstrapper)"
-          }
+          Copy-Item "staging/p2ptransfer-gui.exe" -Destination "$zipDir/p2ptransfer-gui.exe"
 
           # README
           @"
@@ -176,21 +165,21 @@ jobs:
           p2p.exe --help
         "@ | Set-Content -Path "$zipDir/README.txt" -Encoding ASCII
 
-          # Create ZIP
+          # Create ZIP in workspace
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zipPath = "${stagingName}.zip"
-          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-          [System.IO.Compression.ZipFile]::CreateFromDirectory((Resolve-Path $zipDir), (Resolve-Path $zipPath))
-          Write-Host "Created $zipPath"
-
-          # Upload as artifact
-          Write-Host "zipPath=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $zipDirFull = Join-Path (Get-Location) $zipDir
+          $zipFile = "portable-zip-output/${stagingName}.zip"
+          New-Item -ItemType Directory -Path "portable-zip-output" -Force | Out-Null
+          $zipFull = Join-Path (Get-Location) $zipFile
+          if (Test-Path $zipFull) { Remove-Item $zipFull -Force }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($zipDirFull, $zipFull)
+          Write-Host "Created $zipFile"
 
       - name: Upload portable ZIP
         uses: actions/upload-artifact@v4
         with:
           name: p2ptransfer-portable-windows
-          path: ${{ env.zipPath }}
+          path: portable-zip-output/*.zip
 
   release:
     needs: [build-cli, build-gui-windows, package-windows]

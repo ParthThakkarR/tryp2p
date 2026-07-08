@@ -1,0 +1,188 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
+
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --all-targets
+
+      - name: Test
+        run: cargo test
+
+  build-release:
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-pc-windows-msvc
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            ext: ""
+            strip: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            ext: ""
+            strip: true
+            deps: gcc-aarch64-linux-gnu
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            ext: ".exe"
+            strip: false
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            ext: ""
+            strip: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            ext: ""
+            strip: true
+
+    runs-on: ${{ matrix.os }}
+    needs: [check]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compilation deps (Linux ARM)
+        if: matrix.deps != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.deps }}
+        shell: bash
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary
+        if: matrix.strip
+        run: |
+          if [ "${{ matrix.os }}" != "windows-latest" ]; then
+            $TOOL_PREFIX=""
+            if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+              TOOL_PREFIX="aarch64-linux-gnu-"
+            fi
+            ${TOOL_PREFIX}strip target/${{ matrix.target }}/release/p2p${{ matrix.ext }}
+          fi
+        shell: bash
+
+      - name: Create package (Windows MSI)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install wixtoolset -y
+          & "C:\Program Files (x86)\WiX Toolset v3.11\bin\candle.exe" `
+            -dP2P_TARGET_DIR="$(pwd)/target/${{ matrix.target }}" `
+            -dP2P_SRC_DIR="$(pwd)" `
+            -out "$env:TEMP\p2ptransfer.wixobj" `
+            wix\p2ptransfer-cli.wxs
+          & "C:\Program Files (x86)\WiX Toolset v3.11\bin\light.exe" `
+            -out "target/${{ matrix.target }}/release/p2ptransfer-${{ matrix.target }}.msi" `
+            "$env:TEMP\p2ptransfer.wixobj"
+
+      - name: Create package (Linux DEB)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          mkdir -p target/deb/{DEBIAN,usr/bin}
+          cp target/${{ matrix.target }}/release/p2p${{ matrix.ext }} target/deb/usr/bin/p2ptransfer
+          cat > target/deb/DEBIAN/control <<EOF
+          Package: p2ptransfer
+          Version: 0.1.0
+          Section: net
+          Priority: optional
+          Architecture: ${{ contains(matrix.target, 'aarch64') && 'arm64' || 'amd64' }}
+          Maintainer: p2ptransfer
+          Description: P2P file transfer tool
+          EOF
+          dpkg-deb --build target/deb target/${{ matrix.target }}/release/p2ptransfer-${{ matrix.target }}.deb
+
+      - name: Create package (macOS DMG)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          APP_DIR="target/${{ matrix.target }}/release/p2ptransfer.app/Contents/MacOS"
+          mkdir -p "$APP_DIR"
+          cp "target/${{ matrix.target }}/release/p2p" "$APP_DIR/p2ptransfer"
+          cat > "target/${{ matrix.target }}/release/p2ptransfer.app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>p2ptransfer</string>
+            <key>CFBundleIdentifier</key><string>com.p2ptransfer.cli</string>
+            <key>CFBundleName</key><string>p2ptransfer</string>
+          </dict></plist>
+          PLIST
+          if command -v create-dmg &>/dev/null; then
+            create-dmg --volname "p2ptransfer 0.1.0" \
+              "target/${{ matrix.target }}/release/p2ptransfer-${{ matrix.target }}.dmg" \
+              "target/${{ matrix.target }}/release/p2ptransfer.app"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2p-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/p2p${{ matrix.ext }}
+            target/${{ matrix.target }}/release/p2ptransfer-*
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Coverage
+        run: cargo tarpaulin --out Html --output-dir coverage
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/

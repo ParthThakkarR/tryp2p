@@ -1,0 +1,47 @@
+[package]
+name = "p2ptransfer-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "p2ptransfer core library - P2P, crypto, compression, transfer engine"
+
+[lib]
+name = "p2ptransfer_core"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+tokio.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+xxhash-rust.workspace = true
+blake3.workspace = true
+x25519-dalek.workspace = true
+rand_core.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+zstd.workspace = true
+lz4_flex.workspace = true
+rayon.workspace = true
+rusqlite.workspace = true
+uuid.workspace = true
+memmap2.workspace = true
+socket2 = "0.6.4"
+
+[dev-dependencies]
+criterion.workspace = true
+tempfile = "3"
+
+[[bench]]
+name = "compression"
+harness = false
+
+[[bench]]
+name = "tcp_throughput"
+harness = false
+
+[[bench]]
+name = "discovery"
+harness = false

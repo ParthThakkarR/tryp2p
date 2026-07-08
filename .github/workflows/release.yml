@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-cli:
+    name: Build CLI (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            ext: .exe
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            ext: ""
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            ext: ""
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build CLI release
+        run: cargo build -p p2ptransfer-cli --release --target ${{ matrix.target }}
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2p-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/p2p${{ matrix.ext }}
+
+  build-gui-windows:
+    name: Build GUI (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop/p2ptransfer-gui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/p2ptransfer-gui/package-lock.json
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri GUI
+        run: npm run tauri build
+
+      - name: Upload GUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2ptransfer-gui-windows
+          path: target/release/p2ptransfer-gui.exe
+
+  release:
+    needs: [build-cli, build-gui-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Display artifacts structure
+        run: find . -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            p2p-x86_64-pc-windows-msvc/p2p.exe
+            p2p-x86_64-unknown-linux-gnu/p2p
+            p2p-x86_64-apple-darwin/p2p
+            p2ptransfer-gui-windows/p2ptransfer-gui.exe

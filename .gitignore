@@ -1,0 +1,14 @@
+target/
+desktop/*/node_modules/
+desktop/*/dist/
+node_modules/
+dist/
+*.log
+*.bin
+*.exe
+build/
+.gradle/
+releases/
+.opencode/
+received/
+slow_received/

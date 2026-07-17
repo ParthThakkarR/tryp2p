@@ -1,6 +1,0 @@
-error: the following required arguments were not provided:
-  <TRANSFER_ID>
-
-Usage: p2p.exe resume <TRANSFER_ID>
-
-For more information, try '--help'.

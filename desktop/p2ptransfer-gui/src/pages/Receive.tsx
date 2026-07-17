@@ -58,10 +58,17 @@ export default function Receive() {
   const [isReceivingWan, setIsReceivingWan] = useState(false);
   const [wanError,    setWanError]    = useState("");
 
-  const { activeReceiveProgress: activeProgress, receiveSpeed: speed, recentTransfers: recents } = useTransfer();
+  const { activeReceiveProgress: activeProgress, receiveSpeed: speed, recentTransfers: recents, receiveError, savedOutputDir, setSavedOutputDir } = useTransfer();
 
-  // Load device ID and output dir
+  // Load device ID and output dir.
+  // For outputDir, we use the localStorage value first (instant, no flicker),
+  // then update it from the backend in the background.
   useEffect(() => {
+    // Restore output dir from localStorage immediately (non-blocking)
+    if (savedOutputDir) {
+      setOutputDir(savedOutputDir);
+    }
+
     Promise.all([
       invoke<string>("get_device_id"),
       invoke<string>("get_device_name"),
@@ -69,14 +76,20 @@ export default function Receive() {
     ]).then(([id, name, dir]) => {
       setDeviceId(id);
       setDeviceName(name);
-      setOutputDir(dir);
+      // Only override if the user hasn't set a custom dir
+      if (!savedOutputDir) {
+        setOutputDir(dir);
+        setSavedOutputDir(dir);
+      }
       setIsLoading(false);
     }).catch(() => setIsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Update output dir in backend when changed
+  // Update output dir in backend and persist to localStorage
   const handleSetOutputDir = async (dir: string) => {
     setOutputDir(dir);
+    setSavedOutputDir(dir);
     try { await invoke("set_output_dir", { dir }); } catch { /* silent */ }
   };
 
@@ -217,6 +230,13 @@ export default function Receive() {
               </span>
             </div>
 
+          </div>
+        )}
+
+        {/* ── Receive-side error ── */}
+        {receiveError && !activeProgress && (
+          <div className="alert alert-error mb-6" role="alert">
+            <strong>Transfer error:</strong> {receiveError}
           </div>
         )}
 

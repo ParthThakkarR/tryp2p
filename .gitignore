@@ -1,14 +1,64 @@
+# Rust
 target/
-desktop/*/node_modules/
-desktop/*/dist/
+**/*.rs.bk
+
+# Node / Web / Tauri
 node_modules/
 dist/
-*.log
+build/
+desktop/*/node_modules/
+desktop/*/dist/
+.env
+.env.local
+
+# Build artifacts and binaries
 *.bin
 *.exe
-build/
-.gradle/
-releases/
-.opencode/
+*.dll
+*.so
+*.dylib
+
+# Logs and debug output
+*.log
+*.err
+*.out
+diagnostic_log*.txt
+build-results.txt
+test-results.txt
+cmd_send_check.txt
+cmd_send_now.txt
+send_full.txt
+send_utf8.txt
+send.txt
+rx.txt
+listen.txt
+listen_utf8.txt
+handler.txt
+diff.txt
+output.txt
+test_relay.txt
+test_wan.txt
+
+# Testing output directories
+test_output*/
+test_recv_dir*/
 received/
 slow_received/
+iroh_out/
+scratch/
+releases/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.opencode/
+
+# Mobile / Flutter
+.gradle/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/

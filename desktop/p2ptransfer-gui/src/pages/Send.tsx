@@ -83,13 +83,13 @@ function formatEta(remainingBytes: number, bytesPerSec: number): string {
 
 /* ── Component ────────────────────────────────────────────── */
 export default function Send() {
-  const [contacts,       setContacts]       = useState<ContactEntry[]>([]);
-  const [selectedFile,   setSelectedFile]   = useState("");
+  const [contacts,        setContacts]        = useState<ContactEntry[]>([]);
+  const [selectedFile,    setSelectedFile]    = useState("");
   const [selectedContact, setSelectedContact] = useState("");
-  const [sendError,      setSendError]      = useState<string | null>(null);
-  const [sendStatus,     setSendStatus]     = useState("");
-  const [wanUrl,         setWanUrl]         = useState("");
-  const [isGeneratingWan,setIsGeneratingWan] = useState(false);
+  const [wanUrl,          setWanUrl]          = useState("");
+  const [isGeneratingWan, setIsGeneratingWan] = useState(false);
+  // Local-only errors (form validation, WAN errors) separate from transfer-error events
+  const [localError, setLocalError]           = useState<string | null>(null);
 
   const {
     sendProgress: progress,
@@ -103,6 +103,10 @@ export default function Send() {
     setSendHash,
     activeRequestId,
     setActiveRequestId,
+    sendStatus,      // live phase label from Rust
+    setSendStatus,   // allows WAN handler to set status text
+    sendRejected,    // true when receiver explicitly rejected
+    sendError: ctxSendError, // error from transfer-error event
     resetSendState,
     startSendTracking
   } = useTransfer();
@@ -136,17 +140,16 @@ export default function Send() {
     const selected = await open({ multiple: false });
     if (selected && !Array.isArray(selected)) {
       setSelectedFile(selected);
-      setSendError(null);
+      setLocalError(null);
       resetSendState();
     }
   };
 
   const handleSend = async () => {
-    if (!selectedFile) { setSendError("Choose a file first."); return; }
-    if (!selectedContact) { setSendError("Choose a contact to send to."); return; }
+    if (!selectedFile) { setLocalError("Choose a file first."); return; }
+    if (!selectedContact) { setLocalError("Choose a contact to send to."); return; }
 
-    setSendError(null);
-    setSendStatus("Connecting to peer…");
+    setLocalError(null);
     startSendTracking();
     setIsSending(true);
 
@@ -154,7 +157,6 @@ export default function Send() {
     setActiveRequestId(reqId);
 
     try {
-      setSendStatus("Waiting for receiver to accept…");
       const hash = await invoke<string>("send_to_contact", {
         requestId: reqId,
         path: selectedFile,
@@ -162,11 +164,14 @@ export default function Send() {
       });
       setSendHash(hash);
       setSendComplete(true);
-      setSendStatus("");
+      setSendError(null);
     } catch (e: unknown) {
       const msg = typeof e === "string" ? e : "Transfer failed.";
-      setSendError(msg);
-      setSendStatus("");
+      // "REJECTED" is the sentinel returned by the backend when the receiver declines.
+      if (msg !== "REJECTED") {
+        setSendError(msg);
+      }
+      // sendRejected is set by the transfer-rejected event listener in context.
     } finally {
       setIsSending(false);
     }
@@ -175,8 +180,7 @@ export default function Send() {
   const reset = () => {
     setSelectedFile("");
     setSelectedContact("");
-    setSendError(null);
-    setSendStatus("");
+    setLocalError(null);
     setWanUrl("");
     setIsPaused(false);
     resetSendState();
@@ -185,7 +189,7 @@ export default function Send() {
   const handleStartWan = async () => {
     if (!selectedFile) return;
     setIsGeneratingWan(true);
-    setSendError(null);
+    setLocalError(null);
     setWanUrl("");
     setSendStatus("Starting Cloudflare tunnel (may take ~10s)...");
     
@@ -196,7 +200,7 @@ export default function Send() {
       setWanUrl(url);
       setSendStatus("");
     } catch (e: any) {
-      setSendError(e.toString());
+      setLocalError(e.toString());
       setSendStatus("");
     } finally {
       setIsGeneratingWan(false);
@@ -338,7 +342,9 @@ export default function Send() {
                style={{ borderColor: sendComplete ? "var(--signal-dim)" : "var(--signal)" }}>
             <div className="flex items-center justify-between mb-4">
               <span className="panel-title-sm" style={{ marginBottom: 0 }}>
-                {sendComplete ? "Transfer complete ✓" : (progress && progress.sent > 0) ? "Uploading…" : sendStatus || "Transferring…"}
+                {sendComplete ? "Transfer complete ✓"
+            : (progress && progress.sent > 0) ? "Uploading…"
+            : sendStatus || "Transferring…"}
               </span>
               {!sendComplete && speed > 0 && (
                 <span className="font-mono text-sm text-signal" style={{ fontWeight: 600 }}>
@@ -415,10 +421,24 @@ export default function Send() {
           </div>
         )}
 
-        {/* ── Error ── */}
-        {sendError && (
+        {/* ── Rejection message ── */}
+        {sendRejected && (
           <div className="alert alert-error mb-4" role="alert">
-            {sendError}
+            <strong>Rejected by receiver.</strong> The other device declined the transfer.
+          </div>
+        )}
+
+        {/* ── Generic error (transfer events from backend) ── */}
+        {ctxSendError && !sendRejected && (
+          <div className="alert alert-error mb-4" role="alert">
+            {ctxSendError}
+          </div>
+        )}
+
+        {/* ── Local error (form validation / WAN) ── */}
+        {localError && (
+          <div className="alert alert-error mb-4" role="alert">
+            {localError}
           </div>
         )}
 

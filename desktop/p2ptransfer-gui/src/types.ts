@@ -68,3 +68,21 @@ export interface TransferCompleteEvent {
   blake3_hash: string;
   elapsed_secs: number;
 }
+
+// Phase transition event emitted by the sender backend
+export interface SendStatusEvent {
+  request_id: string;
+  /** "connecting" | "waiting_for_accept" | "accepted" | "transferring" | "done" */
+  status: string;
+}
+
+// Emitted when the receiver explicitly rejects a transfer
+export interface TransferRejectedEvent {
+  request_id: string;
+}
+
+// Emitted when a network or disk error occurs during transfer
+export interface TransferErrorEvent {
+  request_id: string;
+  error: string;
+}

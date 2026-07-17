@@ -117,22 +117,27 @@ async fn list_transfers(state: tauri::State<'_, AppState>) -> Result<Vec<Transfe
 
 #[tauri::command]
 fn pause_transfer(request_id: String) {
-    if let Some(flag) = protocol::TRANSFER_PAUSE_FLAGS.get(&request_id) {
-        flag.store(true, std::sync::atomic::Ordering::Relaxed);
-    } else {
-        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        protocol::TRANSFER_PAUSE_FLAGS.insert(request_id, flag);
-    }
+    let flag = protocol::TRANSFER_PAUSE_FLAGS
+        .entry(request_id)
+        .or_insert_with(protocol::PauseFlag::new)
+        .clone();
+    flag.pause();
 }
 
 #[tauri::command]
 fn resume_transfer(request_id: String) {
     if let Some(flag) = protocol::TRANSFER_PAUSE_FLAGS.get(&request_id) {
-        flag.store(false, std::sync::atomic::Ordering::Relaxed);
-    } else {
-        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        protocol::TRANSFER_PAUSE_FLAGS.insert(request_id, flag);
+        flag.resume();
     }
+}
+
+/// Returns all request IDs currently awaiting user acceptance.
+/// Used by the frontend on reconnect to re-display any pending popups.
+#[tauri::command]
+async fn get_pending_transfers(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    Ok(state.pending_requests.pending_ids().await)
 }
 
 #[tauri::command]
@@ -832,6 +837,7 @@ fn main() {
             set_output_dir,
             start_wan_tunnel,
             download_wan_tunnel,
+            get_pending_transfers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

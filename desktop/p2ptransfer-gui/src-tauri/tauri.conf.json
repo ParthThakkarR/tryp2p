@@ -45,9 +45,10 @@
       {
         "fullscreen": false,
         "resizable": true,
-        "title": "p2ptransfer P2P Transfer",
+        "title": "BLIP — Encrypted P2P Transfer",
         "width": 900,
-        "height": 700
+        "height": 700,
+        "fileDropEnabled": false
       }
     ]
   }

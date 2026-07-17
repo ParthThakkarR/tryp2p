@@ -1,3 +1,4 @@
+
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -151,19 +152,15 @@ pub async fn connect(addr: SocketAddr) -> Result<TcpStream> {
     Ok(stream)
 }
 
-pub async fn send_message(stream: &mut TcpStream, data: &[u8]) -> Result<()> {
-    stream
-        .write_all(&(data.len() as u64).to_be_bytes())
-        .await
-        .context("Failed to write message length")?;
-    stream
-        .write_all(data)
-        .await
-        .context("Failed to write message payload")?;
+pub async fn send_message<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W, data: &[u8]) -> Result<()> {
+    let mut framed = Vec::with_capacity(8 + data.len());
+    framed.extend_from_slice(&(data.len() as u64).to_be_bytes());
+    framed.extend_from_slice(data);
+    stream.write_all(&framed).await.context("Failed to write message")?;
     Ok(())
 }
 
-pub async fn receive_message(stream: &mut TcpStream) -> Result<Vec<u8>> {
+pub async fn receive_message<R: tokio::io::AsyncRead + Unpin>(stream: &mut R) -> Result<Vec<u8>> {
     let mut len_buf = [0u8; 8];
     stream
         .read_exact(&mut len_buf)

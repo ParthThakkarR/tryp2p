@@ -3,7 +3,7 @@ use p2ptransfer_core::compress::detector;
 use p2ptransfer_core::crypto::aead;
 use p2ptransfer_core::crypto::ecdh::EcdhKeyExchange;
 use p2ptransfer_core::network::tcp::{self, DEFAULT_TCP_PORT};
-use p2ptransfer_core::network::{nat, relay, stun};
+
 use p2ptransfer_core::p2p::discovery::DiscoveryService;
 use p2ptransfer_core::transfer::engine::{TransferEngine, TransferMetadata};
 use p2ptransfer_core::transfer::resume::{TransferResumeManager, TransferStatus};
@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::io::{AsyncWriteExt, AsyncSeekExt};
 use tokio::net::TcpStream;
 
 fn set_nodelay(stream: &TcpStream) {
@@ -50,6 +51,9 @@ enum Commands {
         /// Chunk size in bytes (default 16MB)
         #[arg(long, default_value_t = 16 * 1024 * 1024)]
         chunk_size: usize,
+        /// Number of parallel connections
+        #[arg(long)]
+        connections: Option<usize>,
         /// Relay server address (host:port) for cross-network transfers
         #[arg(long)]
         relay: Option<String>,
@@ -148,6 +152,8 @@ struct P2pConfig {
     data_dir: PathBuf,
     #[serde(default)]
     relay_server: Option<String>,
+    #[serde(default = "default_connections")]
+    connections: usize,
 }
 
 fn default_tcp_port() -> u16 {
@@ -162,6 +168,8 @@ fn default_compression() -> i32 {
 fn default_discovery_port() -> u16 {
     9876
 }
+fn default_connections() -> usize { 4 }
+
 fn default_data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -177,6 +185,7 @@ impl Default for P2pConfig {
             discovery_port: default_discovery_port(),
             data_dir: default_data_dir(),
             relay_server: None,
+            connections: default_connections(),
         }
     }
 }
@@ -257,7 +266,8 @@ async fn main() -> Result<()> {
             compression,
             chunk_size,
             relay,
-        } => cmd_send(path, peer, compression, chunk_size, relay, &config).await,
+            connections,
+        } => cmd_send(path, peer, compression, chunk_size, relay, connections, &config).await,
         Commands::Listen {
             port,
             output,
@@ -324,15 +334,16 @@ const TAG_COMPLETE: u8 = 0x03;
 const TAG_ERROR: u8 = 0x04;
 const TAG_CLIENT_HELLO: u8 = 0x05;
 const TAG_SERVER_HELLO: u8 = 0x06;
+const TAG_SESSION_JOIN: u8 = 0x07;
 
-async fn send_tagged(stream: &mut TcpStream, tag: u8, payload: &[u8]) -> Result<()> {
+async fn send_tagged<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W, tag: u8, payload: &[u8]) -> Result<()> {
     let mut framed = Vec::with_capacity(1 + payload.len());
     framed.push(tag);
     framed.extend_from_slice(payload);
     tcp::send_message(stream, &framed).await
 }
 
-async fn receive_tagged(stream: &mut TcpStream) -> Result<(u8, Vec<u8>)> {
+async fn receive_tagged<R: tokio::io::AsyncRead + Unpin>(stream: &mut R) -> Result<(u8, Vec<u8>)> {
     let data = tcp::receive_message(stream).await?;
     if data.is_empty() {
         anyhow::bail!("Empty message");
@@ -427,64 +438,8 @@ async fn redo_handshake(
 
 async fn try_connect_fallback(
     peer_addr: SocketAddr,
-    relay_addr: Option<&SocketAddr>,
-    peer_id_opt: Option<String>,
 ) -> Result<TcpStream> {
-    // 1. Try direct connect (works for LAN, or WAN with port forwarding)
-    println!("Connecting to {peer_addr}...");
-    if let Ok(s) = tcp::connect(peer_addr).await {
-        println!("Connected to {peer_addr}");
-        return Ok(s);
-    }
-
-    println!("Direct connect failed. Attempting NAT traversal...");
-
-    // 2. STUN discover our own public address (for diagnostics)
-    let our_public = std::thread::spawn(|| stun::discover_address(None))
-        .join()
-        .ok()
-        .and_then(|r| r.ok());
-    if let Some(ref info) = our_public {
-        println!("  Our public IP: {}", info.public_addr);
-    }
-
-    // 3. Try TCP hole punch (simultaneous connect+listen on same port)
-    println!("  Trying TCP hole punch on port {}...", peer_addr.port());
-    if let Ok(s) = nat::tcp_hole_punch(peer_addr.port(), peer_addr, 5000).await {
-        println!("  Hole punch succeeded!");
-        return Ok(s);
-    }
-
-    // 4. Try relay if configured
-    if let Some(relay) = relay_addr {
-        let target_id = peer_id_opt.unwrap_or_else(|| format!("{}:{}", peer_addr.ip(), peer_addr.port()));
-        println!("  Connecting via relay at {relay} (target: {target_id})...");
-        let (relay_stream, peer_public_addr) = relay::relay_connect(*relay, &target_id)
-            .await
-            .map_err(|e| anyhow::anyhow!("Relay connection failed: {e}"))?;
-            
-        let local_port = relay_stream.local_addr().map(|a| a.port()).unwrap_or(0);
-        println!("  Relay paired. Attempting direct hole-punch to {peer_public_addr}...");
-        println!("  [DEBUG] Sender used local port {local_port} for relay, reusing port {local_port} for hole-punch.");
-        
-        if let Ok(direct_stream) = nat::tcp_hole_punch(local_port, peer_public_addr, 5000).await {
-            println!("  Hole punch succeeded! Using direct connection.");
-            return Ok(direct_stream);
-        } else {
-            println!("  Hole punch failed. Using relay connection.");
-            return Ok(relay_stream);
-        }
-    }
-
-    anyhow::bail!(
-        "Cannot reach {peer_addr}.\n\n\
-         Options:\n\
-         1. Use --relay <host:port> to connect via a relay server\n\
-         2. Forward port {} on the receiver's router\n\
-         3. Use a VPN like Tailscale/ZeroTier to create a virtual LAN\n\n\
-         If the receiver is on the same network, check the IP address.",
-        peer_addr.port()
-    );
+    tcp::connect(peer_addr).await
 }
 
 async fn cmd_send(
@@ -493,6 +448,7 @@ async fn cmd_send(
     compression: i32,
     chunk_size: usize,
     relay: Option<String>,
+    connections: Option<usize>,
     config: &P2pConfig,
 ) -> Result<()> {
     if !path.exists() {
@@ -519,33 +475,12 @@ async fn cmd_send(
     let peer_addr_opt: Option<SocketAddr> = resolved_peer.parse().ok();
 
     let mut stream = if let Some(peer_addr) = peer_addr_opt {
-        match try_connect_fallback(peer_addr, relay_addr.as_ref(), resolved_peer_id).await {
+        match try_connect_fallback(peer_addr).await {
             Ok(s) => s,
             Err(e) => anyhow::bail!("{e}"),
         }
-    } else if let Some(ref relay) = relay_addr {
-        println!("Connecting to '{peer}' via relay at {relay}...");
-        match relay::relay_connect(*relay, &peer).await {
-            Ok((relay_stream, peer_public_addr)) => {
-                let local_port = relay_stream.local_addr().map(|a| a.port()).unwrap_or(0);
-                println!("  Relay paired. Attempting direct hole-punch to {peer_public_addr}...");
-                println!("  [DEBUG] Sender used local port {local_port} for relay, reusing port {local_port} for hole-punch.");
-                
-                if let Ok(direct_stream) = nat::tcp_hole_punch(local_port, peer_public_addr, 5000).await {
-                    println!("  Hole punch succeeded! Using direct connection.");
-                    direct_stream
-                } else {
-                    println!("  Hole punch failed. Using relay connection.");
-                    relay_stream
-                }
-            }
-            Err(e) => anyhow::bail!("Relay connection to '{peer}' failed: {e}"),
-        }
     } else {
-        anyhow::bail!(
-            "Cannot resolve '{peer}'.\n\
-             Use IP:port format for direct connections, or add --relay <host:port> for name-based connections."
-        );
+        anyhow::bail!("Cannot resolve peer");
     };
     set_nodelay(&stream);
 
@@ -568,7 +503,7 @@ async fn cmd_send(
     let mut nonce_prefix = aead::generate_nonce_prefix();
     info!("Key exchange complete");
 
-    let engine = TransferEngine::new(4);
+    let engine = Arc::new(TransferEngine::new(4));
     let mut metadata = engine.create_metadata(&path, chunk_size).await?;
     metadata.nonce_prefix = nonce_prefix;
 
@@ -766,178 +701,39 @@ async fn cmd_send(
 async fn cmd_listen(
     port: u16,
     output_dir: &str,
-    relay: Option<String>,
+    _relay: Option<String>,
     config: &P2pConfig,
 ) -> Result<()> {
-    let hostname = hostname::get()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    let relay_addr = relay
-        .or_else(|| config.relay_server.clone())
-        .and_then(|s| s.parse::<SocketAddr>().ok());
-
-    let mut discovery =
-        DiscoveryService::new(hostname.clone(), port, config.discovery_port).await?;
+    let hostname = hostname::get().unwrap_or_default().to_string_lossy().to_string();
+    let mut discovery = DiscoveryService::new(hostname.clone(), port, config.discovery_port).await?;
     discovery.start().await?;
-
-    let resume_manager = Arc::new(
-        TransferResumeManager::new(config.data_dir.join("resume"))
-            .context("Failed to initialize resume manager")?,
-    );
-
-    let listener = TcpListener::bind(format!("0.0.0.0:{port}"))
-        .await
-        .context("Failed to bind TCP listener")?;
-
-    println!("Listening for transfers on port {port}");
-    println!("  Peer name: {hostname}");
-    println!("  Press Ctrl+C to stop");
-
-    // Discover public IP via STUN (background)
-    let stun_hostname = hostname.clone();
-    let _stun_port = port;
-    let stun_relay = relay_addr;
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        match tokio::task::spawn_blocking(|| stun::discover_address(None)).await {
-            Ok(Ok(info)) => {
-                println!();
-                println!("  🌐 Public IP: {} (STUN)", info.public_addr);
-                println!("  ────────────────────────────────────────");
-                println!("  Remote senders use:");
-                println!("    p2p send <file> {}", info.public_addr);
-                if stun_relay.is_some() {
-                    println!("    p2p send --relay <relay-addr> <file> {stun_hostname}");
-                }
-                println!("  ────────────────────────────────────────");
-                println!();
-            }
-            _ => {
-                println!();
-                println!("  ⚠️  Public IP discovery failed");
-                if stun_relay.is_none() {
-                    println!("  For cross-network: use --relay <host:port> or set relay_server in config");
-                }
-                println!();
-            }
-        }
-    });
-
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        let _ = shutdown_tx.send(true);
-    });
-
-    // Register with relay server if configured — re-registers after each transfer
-    if let Some(relay) = relay_addr {
-        let rid = hostname.clone();
-        let rm = resume_manager.clone();
-        let out = PathBuf::from(output_dir);
-        let mut relay_shutdown = shutdown_rx.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(1000)).await;
-            loop {
-                println!("  Registering with relay server at {relay} as '{rid}'...");
-                match relay::relay_register(relay, &rid).await {
-                    Ok(mut stream) => {
-                        println!("  ✅ Registered with relay as '{rid}'");
-                        println!("     Senders connect via: p2p send --relay {relay} <file> {rid}");
-                        // Wait for a sender to be paired by the relay server
-                        tokio::select! {
-                            pair_result = relay::relay_wait_for_pairing(&mut stream) => {
-                                match pair_result {
-                                    Ok(sender_public_addr) => {
-                                        info!("Relay paired with {sender_public_addr}");
-                                        println!("  📡 Relay paired. Attempting direct hole-punch...");
-                                        
-                                        let local_port = stream.local_addr().map(|a| a.port()).unwrap_or(0);
-                                        println!("  [DEBUG] Listener used local port {local_port} for relay, reusing port {local_port} for hole-punch.");
-                                        
-                                        let final_stream = match nat::tcp_hole_punch(local_port, sender_public_addr, 5000).await {
-                                            Ok(direct_stream) => {
-                                                println!("  ✅ Hole punch succeeded!");
-                                                direct_stream
-                                            }
-                                            Err(_) => {
-                                                println!("  ⚠️ Hole punch failed, using relay.");
-                                                stream
-                                            }
-                                        };
-                                        
-                                        let handler = ReceiverHandler {
-                                            resume_manager: rm.clone(),
-                                            output_dir: out.clone(),
-                                        };
-                                        tokio::spawn(async move {
-                                            if let Err(e) = handler.run(final_stream, relay).await {
-                                                warn!("Transfer error: {e}");
-                                            }
-                                        });
-                                        // Loop back to re-register for next connection
-                                    }
-                                    Err(e) => {
-                                        warn!("Relay pairing failed: {e}");
-                                        tokio::time::sleep(Duration::from_secs(5)).await;
-                                    }
-                                }
-                            }
-                            _ = relay_shutdown.changed() => {
-                                info!("Relay listener shutting down");
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("  ⚠️  Relay registration failed: {e}");
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                    }
-                }
-            }
-        });
-    }
-
+    let resume_manager = Arc::new(TransferResumeManager::new(config.data_dir.join("resume"))?);
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
+    let (_shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    
+    let active_transfers = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    
     loop {
         tokio::select! {
             result = listener.accept() => {
                 let (stream, addr) = result?;
-                let rm = resume_manager.clone();
-                let out = PathBuf::from(output_dir);
-                let mut shutdown_rx = shutdown_rx.clone();
+                let handler = ReceiverHandler {
+                    resume_manager: resume_manager.clone(),
+                    output_dir: std::path::PathBuf::from(output_dir),
+                    active_transfers: active_transfers.clone(),
+                };
                 tokio::spawn(async move {
-                    let handler = ReceiverHandler { resume_manager: rm, output_dir: out };
-                    tokio::select! {
-                        r = handler.run(stream, addr) => {
-                            if let Err(e) = r {
-                                warn!("Connection error from {addr}: {e}");
-                            }
-                        }
-                        _ = shutdown_rx.changed() => {}
-                    }
+                    let _ = handler.run(stream, addr).await;
                 });
             }
-            _ = shutdown_rx.changed() => {
-                println!("\nShutting down...");
-                discovery.stop().await;
-                break;
-            }
+            _ = shutdown_rx.changed() => break,
         }
     }
-
     Ok(())
 }
 
-async fn cmd_relay(port: u16) -> Result<()> {
-    println!("Starting relay server on port {port}...");
-    let mut server = relay::RelayServer::new(port);
-    server.start().await.map_err(|e| anyhow::anyhow!(e))?;
-    println!("Relay server running on port {port}. Press Ctrl+C to stop.");
-    tokio::signal::ctrl_c().await?;
-    server.stop();
-    println!("\nRelay server stopped.");
-    Ok(())
+async fn cmd_relay(_port: u16) -> Result<()> {
+    anyhow::bail!("relay disabled")
 }
 
 async fn cmd_slow_receive(output: String, chunk_delay_ms: u64, config: &P2pConfig) -> Result<()> {
@@ -994,7 +790,7 @@ async fn cmd_slow_receive(output: String, chunk_delay_ms: u64, config: &P2pConfi
         metadata.file_size as i64,
     )?;
 
-    let engine = TransferEngine::new(4);
+    let engine = Arc::new(TransferEngine::new(4));
 
     // --- Receive chunks with delay ---
     for chunk_index in 0..metadata.total_chunks {
@@ -1058,7 +854,17 @@ async fn cmd_slow_receive(output: String, chunk_delay_ms: u64, config: &P2pConfi
     Ok(())
 }
 
+
+struct SharedTransferState {
+    file_mutex: Arc<tokio::sync::Mutex<tokio::fs::File>>,
+    metadata: TransferMetadata,
+    session_id: String,
+    resume_manager: Arc<TransferResumeManager>,
+    chunks_received: Arc<std::sync::atomic::AtomicU64>,
+}
+
 struct ReceiverHandler {
+    active_transfers: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<SharedTransferState>>>>,
     resume_manager: Arc<TransferResumeManager>,
     output_dir: PathBuf,
 }
@@ -1066,7 +872,7 @@ struct ReceiverHandler {
 impl ReceiverHandler {
     async fn run(self, mut stream: TcpStream, addr: SocketAddr) -> Result<()> {
         set_nodelay(&stream);
-        // --- Step 0: ECDH Handshake (before metadata) ---
+        // --- Step 0: ECDH Handshake ---
         let (tag, client_pub_raw) = receive_tagged(&mut stream).await?;
         if tag == TAG_ERROR {
             return Ok(());
@@ -1075,144 +881,195 @@ impl ReceiverHandler {
             send_tagged(&mut stream, TAG_ERROR, b"Expected CLIENT_HELLO").await?;
             anyhow::bail!("Expected CLIENT_HELLO, got tag={tag}");
         }
-        let client_pub_bytes: [u8; 32] = client_pub_raw
-            .as_slice()
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid client public key length"))?;
-
+        let client_pub_bytes: [u8; 32] = client_pub_raw.as_slice().try_into().map_err(|_| anyhow::anyhow!("Invalid key"))?;
         let kx = EcdhKeyExchange::new();
         let server_pub = kx.public_key_bytes();
         send_tagged(&mut stream, TAG_SERVER_HELLO, &server_pub).await?;
-
         let shared_secret = kx.derive_shared_secret(&client_pub_bytes)?;
-        let enc_key =
-            aead::derive_encryption_key(&shared_secret, b"P2PTRANSFER_SALT_v1", b"p2ptransfer-v1-encryption")?;
+        let enc_key = aead::derive_encryption_key(&shared_secret, b"P2PTRANSFER_SALT_v1", b"p2ptransfer-v1-encryption")?;
 
-        // --- Step 1: Read metadata ---
+        // --- Step 1: Read metadata or session join ---
         let (tag, payload) = receive_tagged(&mut stream).await?;
-        if tag == TAG_ERROR {
-            return Ok(()); // peer sent error, nothing to do
-        }
-        if tag != TAG_METADATA {
-            send_tagged(
-                &mut stream,
-                TAG_ERROR,
-                b"Expected METADATA as first message",
-            )
-            .await?;
-            anyhow::bail!("Expected METADATA, got tag={tag}");
-        }
+        if tag == TAG_ERROR { return Ok(()); }
 
-        let metadata: TransferMetadata =
-            serde_json::from_slice(&payload).context("Failed to parse TransferMetadata")?;
-        let nonce_prefix = metadata.nonce_prefix;
-        info!("Incoming transfer: {} from {addr}", metadata.file_name);
-
-        // Accept the transfer
-        send_tagged(&mut stream, TAG_METADATA, b"ACCEPT").await?;
-
-        let output_path = self.output_dir.join(&metadata.file_name);
-        let session_id = metadata.session_id.clone();
-
-        let start_chunk = if metadata.is_resume {
-            let offset_bytes = metadata.resume_offset;
-            (offset_bytes / metadata.chunk_size as u64).min(metadata.total_chunks - 1)
-        } else {
-            0
-        };
-
-        self.resume_manager.create_transfer(
-            &addr.to_string(),
-            &output_path.to_string_lossy(),
-            metadata.file_size as i64,
-        )?;
-
-        let engine = TransferEngine::new(4);
-        let mut bytes_received: i64 = (start_chunk * metadata.chunk_size as u64) as i64;
-
-        // --- Step 2: Receive chunks ---
-        for chunk_index in start_chunk..metadata.total_chunks {
-            let (tag, payload) = receive_tagged(&mut stream).await?;
-
-            if tag == TAG_ERROR {
-                let err = String::from_utf8_lossy(&payload);
-                self.resume_manager.fail_transfer(&session_id)?;
-                anyhow::bail!("Peer sent error: {err}");
-            }
-            if tag != TAG_CHUNK {
-                send_tagged(&mut stream, TAG_ERROR, b"Expected CHUNK").await?;
-                self.resume_manager.fail_transfer(&session_id)?;
-                anyhow::bail!("Expected CHUNK, got tag={tag}");
-            }
-            if payload.len() < 4 {
-                send_tagged(&mut stream, TAG_ERROR, b"Malformed chunk").await?;
-                self.resume_manager.fail_transfer(&session_id)?;
-                anyhow::bail!("Malformed chunk (len={})", payload.len());
-            }
-
-            if payload.len() < 5 {
-                send_tagged(&mut stream, TAG_ERROR, b"Malformed chunk").await?;
-                self.resume_manager.fail_transfer(&session_id)?;
-                anyhow::bail!("Malformed chunk (len={})", payload.len());
-            }
-
-            let recv_index = u32::from_le_bytes(payload[..4].try_into().unwrap()) as u64;
-            if recv_index != chunk_index {
-                send_tagged(&mut stream, TAG_ERROR, b"Chunk index mismatch").await?;
-                self.resume_manager.fail_transfer(&session_id)?;
-                anyhow::bail!("Chunk index mismatch: expected {chunk_index}, got {recv_index}");
-            }
-
-            let compressed = payload[4] != 0;
-            let nonce = aead::build_nonce(&nonce_prefix, chunk_index);
-            let decrypted_payload = aead::decrypt(&enc_key, &nonce, &payload[5..])
-                .context("Chunk decryption failed (bad tag or corrupted)")?;
-            let chunk_data = if compressed {
-                p2ptransfer_core::compress::zstd::decompress(&decrypted_payload)
-                    .context("Failed to decompress chunk")?
+        let shared_state;
+        if tag == TAG_SESSION_JOIN {
+            let join_session_id = String::from_utf8_lossy(&payload).to_string();
+            info!("Incoming auxiliary connection for session {} from {addr}", join_session_id);
+            let state_opt = {
+                let map = self.active_transfers.lock().unwrap();
+                map.get(&join_session_id).cloned()
+            };
+            if let Some(s) = state_opt {
+                shared_state = s;
+                send_tagged(&mut stream, TAG_METADATA, b"ACCEPT").await?;
             } else {
-                decrypted_payload
+                send_tagged(&mut stream, TAG_ERROR, b"Unknown session").await?;
+                anyhow::bail!("Unknown session_id for TAG_SESSION_JOIN");
+            }
+        } else if tag == TAG_METADATA {
+            let metadata: TransferMetadata = serde_json::from_slice(&payload).context("Failed to parse TransferMetadata")?;
+            info!("Incoming transfer: {} from {addr}", metadata.file_name);
+            let output_path = self.output_dir.join(&metadata.file_name);
+            if let Some(parent) = output_path.parent() { tokio::fs::create_dir_all(parent).await?; }
+            
+            let mut file = tokio::fs::OpenOptions::new()
+                .create(true).truncate(false).write(true)
+                .open(&output_path).await.context("Failed to open output file")?;
+            file.set_len(metadata.file_size).await?;
+            let file_mutex = Arc::new(tokio::sync::Mutex::new(file));
+
+            self.resume_manager.create_transfer(&addr.to_string(), &output_path.to_string_lossy(), metadata.file_size as i64)?;
+
+            let start_chunk = if metadata.is_resume {
+                (metadata.resume_offset / metadata.chunk_size as u64).min(metadata.total_chunks - 1)
+            } else {
+                0
             };
 
-            engine
-                .process_received_chunk(&output_path, chunk_index, metadata.chunk_size, &chunk_data)
-                .await?;
+            let state = Arc::new(SharedTransferState {
+                file_mutex,
+                metadata: metadata.clone(),
+                session_id: metadata.session_id.clone(),
+                resume_manager: self.resume_manager.clone(),
+                chunks_received: Arc::new(std::sync::atomic::AtomicU64::new(start_chunk)),
+            });
 
-            let mut ack = Vec::with_capacity(4);
-            ack.extend_from_slice(&(chunk_index as u32).to_le_bytes());
-            send_tagged(&mut stream, TAG_CHUNK_ACK, &ack).await?;
-
-            bytes_received += chunk_data.len() as i64;
-            self.resume_manager
-                .update_progress(&session_id, bytes_received)?;
-
-            debug!(
-                "Received chunk {}/{} from {addr}",
-                chunk_index + 1,
-                metadata.total_chunks
-            );
-        }
-
-        // --- Step 3: Verify and complete ---
-        let hash_match = engine
-            .verify_checksum(&output_path, &metadata.checksum)
-            .await?;
-
-        if hash_match {
-            send_tagged(&mut stream, TAG_COMPLETE, &metadata.checksum).await?;
-            self.resume_manager
-                .complete_transfer(&session_id, &format_hex(&metadata.checksum))?;
-            info!("Transfer {session_id} completed: {}", metadata.file_name);
+            {
+                let mut map = self.active_transfers.lock().unwrap();
+                map.insert(metadata.session_id.clone(), state.clone());
+            }
+            shared_state = state;
+            send_tagged(&mut stream, TAG_METADATA, b"ACCEPT").await?;
         } else {
-            let err_msg = b"Checksum mismatch";
-            send_tagged(&mut stream, TAG_ERROR, err_msg).await?;
-            self.resume_manager.fail_transfer(&session_id)?;
-            anyhow::bail!("Checksum mismatch for {session_id}");
+            send_tagged(&mut stream, TAG_ERROR, b"Expected METADATA or SESSION_JOIN").await?;
+            anyhow::bail!("Expected METADATA or SESSION_JOIN, got tag={tag}");
         }
 
+        let metadata = &shared_state.metadata;
+        let file_mutex = &shared_state.file_mutex;
+        let nonce_prefix = metadata.nonce_prefix;
+        let engine = Arc::new(TransferEngine::new(4));
+        let session_id = shared_state.session_id.clone();
+        let output_path = self.output_dir.join(&metadata.file_name);
+
+        let (mut rh, mut wh) = stream.into_split();
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel(32);
+        
+        let mut reader_task = tokio::spawn(async move {
+            loop {
+                match receive_tagged(&mut rh).await {
+                    Ok((tag, payload)) => { if chunk_tx.send(Ok((tag, payload))).await.is_err() { break; } }
+                    Err(e) => { let _ = chunk_tx.send(Err(e)).await; break; }
+                }
+            }
+            rh
+        });
+
+        let mut pipeline_error = None;
+        let mut join_set = tokio::task::JoinSet::new();
+
+        loop {
+            tokio::select! {
+                Some(res) = chunk_rx.recv() => {
+                    match res {
+                        Ok((tag, payload)) => {
+                            if tag == TAG_ERROR { pipeline_error = Some(anyhow::anyhow!("Peer error")); break; }
+                            if tag != TAG_CHUNK || payload.len() < 5 { pipeline_error = Some(anyhow::anyhow!("Malformed chunk")); break; }
+                            
+                            let recv_index = u32::from_le_bytes(payload[..4].try_into().unwrap()) as u64;
+                            let compressed = payload[4] != 0;
+                            let encrypted_payload = payload[5..].to_vec();
+                            let enc_key = enc_key;
+                            let nonce_prefix = nonce_prefix;
+                            let chunk_size = metadata.chunk_size;
+                            let file_clone = file_mutex.clone();
+                            
+                            join_set.spawn(async move {
+                                let chunk_data = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+                                    let nonce = aead::build_nonce(&nonce_prefix, recv_index);
+                                    let decrypted = aead::decrypt(&enc_key, &nonce, &encrypted_payload)?;
+                                    if compressed {
+                                        Ok(p2ptransfer_core::compress::zstd::decompress(&decrypted)?)
+                                    } else {
+                                        Ok(decrypted)
+                                    }
+                                }).await??;
+                                
+                                let offset = recv_index * chunk_size as u64;
+                                let mut f = file_clone.lock().await;
+                                f.seek(std::io::SeekFrom::Start(offset)).await?;
+                                f.write_all(&chunk_data).await?;
+                                Ok::<_, anyhow::Error>((recv_index, chunk_data.len()))
+                            });
+                        }
+                        Err(e) => { pipeline_error = Some(e); break; }
+                    }
+                }
+                Some(res) = join_set.join_next(), if !join_set.is_empty() => {
+                    match res {
+                        Ok(Ok((recv_index, len))) => {
+                            let mut ack = Vec::with_capacity(4);
+                            ack.extend_from_slice(&(recv_index as u32).to_le_bytes());
+                            if let Err(e) = send_tagged(&mut wh, TAG_CHUNK_ACK, &ack).await {
+                                pipeline_error = Some(e);
+                                break;
+                            }
+                            
+                            let old_count = shared_state.chunks_received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            let _ = shared_state.resume_manager.update_progress(&session_id, (old_count + 1) as i64 * metadata.chunk_size as i64);
+                            
+                            if old_count + 1 == metadata.total_chunks {
+                                let mut f = file_mutex.lock().await;
+                                f.seek(std::io::SeekFrom::Start(0)).await?;
+                                let std_file = f.try_clone().await.expect("Failed to clone").into_std().await;
+                                let hash = tokio::task::spawn_blocking(move || {
+                                    let mut std_file = std_file;
+                                    p2ptransfer_core::transfer::hasher::blake3_hash_reader(&mut std_file)
+                                }).await??;
+                                
+                                if hash != metadata.checksum {
+                                    send_tagged(&mut wh, TAG_ERROR, b"Checksum mismatch").await?;
+                                    shared_state.resume_manager.fail_transfer(&session_id)?;
+                                } else {
+                                    send_tagged(&mut wh, TAG_COMPLETE, &metadata.checksum).await?;
+                                    shared_state.resume_manager.complete_transfer(&session_id, &format_hex(&metadata.checksum))?;
+                                }
+                                
+                                {
+                                    let mut map = self.active_transfers.lock().unwrap();
+                                    map.remove(&session_id);
+                                }
+                                break;
+                            }
+                        }
+                        Ok(Err(e)) => { pipeline_error = Some(e); break; }
+                        Err(e) => { pipeline_error = Some(anyhow::anyhow!("Task panic: {}", e)); break; }
+                    }
+                }
+                else => {
+                    if join_set.is_empty() {
+                        // Channel closed and join set empty
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(e) = pipeline_error {
+            shared_state.resume_manager.fail_transfer(&session_id)?;
+            anyhow::bail!("Receiver pipeline broken: {e:?}");
+        }
+
+        let mut f = file_mutex.lock().await;
+        f.flush().await?;
+        drop(f);
+        drop(chunk_rx);
+        reader_task.abort();
         Ok(())
     }
 }
+
 
 async fn cmd_list(duration: u64, config: &P2pConfig) -> Result<()> {
     let hostname = hostname::get()
@@ -1383,39 +1240,8 @@ fn cmd_config_show(config: &P2pConfig, path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_whoami(name: String, config: &P2pConfig) -> Result<()> {
-    let local_ip = local_ip_address::local_ip().context("Failed to detect local IP")?;
-    println!("Detecting public IP via STUN...");
-    
-    let public_ip_opt = stun::discover_address(None).ok();
-    let display_ip = if let Some(ip) = &public_ip_opt {
-        ip.public_addr.ip().to_string()
-    } else {
-        println!("⚠️ STUN discovery failed, falling back to local IP.");
-        local_ip.to_string()
-    };
-    
-    let port = config.tcp_port;
-    
-    // Generate a stable peer ID by hashing the name + machine info
-    let hash_input = format!("{}-{}-{}", name, display_ip, port);
-    let hash = blake3::hash(hash_input.as_bytes());
-    let peer_id = hash.to_hex()[..8].to_string().to_uppercase();
-
-    let resume_manager = TransferResumeManager::new(config.data_dir.join("resume"))?;
-    resume_manager.upsert_contact(&name, &peer_id, &display_ip, port)?;
-
-    println!("\n✅ Successfully registered as '{}'", name);
-    println!("   Peer ID: {}", peer_id);
-    println!("   Local IP: {}:{}", local_ip, port);
-    if let Some(ip) = public_ip_opt {
-        println!("   Public IP: {}", ip.public_addr);
-    }
-    
-    println!("\n⚠️ IMPORTANT: To transfer across different networks, you must still share your");
-    println!("   Peer ID or IP address out-of-band for the initial connection.");
-    
-    Ok(())
+async fn cmd_whoami(_name: String, _config: &P2pConfig) -> Result<()> {
+    anyhow::bail!("whoami disabled")
 }
 
 async fn cmd_contacts(action: ContactsAction, config: &P2pConfig) -> Result<()> {

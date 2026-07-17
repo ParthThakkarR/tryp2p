@@ -1,5 +1,0 @@
-;!@Install@!UTF-8!
-Title="P2P File Transfer"
-RunProgram="P2PTransfer\\P2PTransfer.exe"
-Directory="%%T\\P2PTransfer"
-;!@InstallEnd@!

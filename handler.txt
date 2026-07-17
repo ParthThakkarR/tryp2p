@@ -1,0 +1,237 @@
+﻿
+  desktop\p2ptransfer-cli\src\main.rs:1211:                let (stream, addr) = result?;
+  desktop\p2ptransfer-cli\src\main.rs:1212:                let rm = resume_manager.clone();
+  desktop\p2ptransfer-cli\src\main.rs:1213:                let out = output_dir.clone();
+  desktop\p2ptransfer-cli\src\main.rs:1214:                let mut shutdown_rx = shutdown_rx.clone();
+  desktop\p2ptransfer-cli\src\main.rs:1215:                tokio::spawn(async move {
+> desktop\p2ptransfer-cli\src\main.rs:1216:                    let handler = ReceiverHandler { resume_manager: rm, 
+output_dir: out };
+  desktop\p2ptransfer-cli\src\main.rs:1217:                    tokio::select! {
+  desktop\p2ptransfer-cli\src\main.rs:1218:                        r = handler.run(stream, addr) => {
+  desktop\p2ptransfer-cli\src\main.rs:1219:                            if let Err(e) = r {
+  desktop\p2ptransfer-cli\src\main.rs:1220:                                warn!("Connection error from {addr}: {e}");
+  desktop\p2ptransfer-cli\src\main.rs:1221:                            }
+  desktop\p2ptransfer-cli\src\main.rs:1222:                        }
+  desktop\p2ptransfer-cli\src\main.rs:1223:                        _ = shutdown_rx.changed() => {}
+  desktop\p2ptransfer-cli\src\main.rs:1224:                    }
+  desktop\p2ptransfer-cli\src\main.rs:1225:                });
+  desktop\p2ptransfer-cli\src\main.rs:1226:            }
+  desktop\p2ptransfer-cli\src\main.rs:1227:            _ = shutdown_rx.changed() => {
+  desktop\p2ptransfer-cli\src\main.rs:1228:                println!("\nShutting down...");
+  desktop\p2ptransfer-cli\src\main.rs:1229:                discovery.stop().await;
+  desktop\p2ptransfer-cli\src\main.rs:1230:                break;
+  desktop\p2ptransfer-cli\src\main.rs:1231:            }
+  desktop\p2ptransfer-cli\src\main.rs:1232:        }
+  desktop\p2ptransfer-cli\src\main.rs:1233:    }
+  desktop\p2ptransfer-cli\src\main.rs:1234:
+  desktop\p2ptransfer-cli\src\main.rs:1235:    Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:1236:}
+  desktop\p2ptransfer-cli\src\main.rs:1237:
+  desktop\p2ptransfer-cli\src\main.rs:1238:
+  desktop\p2ptransfer-cli\src\main.rs:1239:async fn cmd_slow_receive(output: String, chunk_delay_ms: u64, config: 
+&P2pConfig) -> Result<()> {
+  desktop\p2ptransfer-cli\src\main.rs:1240:    let resume_manager = Arc::new(
+  desktop\p2ptransfer-cli\src\main.rs:1241:        TransferResumeManager::new(config.data_dir.join("resume"))
+  desktop\p2ptransfer-cli\src\main.rs:1242:            .context("Failed to initialize resume manager")?,
+  desktop\p2ptransfer-cli\src\main.rs:1243:    );
+  desktop\p2ptransfer-cli\src\main.rs:1244:
+  desktop\p2ptransfer-cli\src\main.rs:1245:    let listener = TcpListener::bind(format!("0.0.0.0:{}", 
+DEFAULT_TCP_PORT))
+  desktop\p2ptransfer-cli\src\main.rs:1246:        .await
+  desktop\p2ptransfer-cli\src\main.rs:1247:        .context("Failed to bind TCP listener")?;
+  desktop\p2ptransfer-cli\src\main.rs:1248:    println!(
+  desktop\p2ptransfer-cli\src\main.rs:1249:        "Slow receiver listening on port {DEFAULT_TCP_PORT} ({}ms delay per 
+chunk)",
+  desktop\p2ptransfer-cli\src\main.rs:1250:        chunk_delay_ms
+  desktop\p2ptransfer-cli\src\main.rs:1251:    );
+  desktop\p2ptransfer-cli\src\main.rs:1252:
+  desktop\p2ptransfer-cli\src\main.rs:1253:    let (mut stream, addr) = listener.accept().await?;
+  desktop\p2ptransfer-cli\src\main.rs:1254:    println!("Accepted connection from {addr}");
+  desktop\p2ptransfer-cli\src\main.rs:1255:    let output_dir = PathBuf::from(&output);
+  desktop\p2ptransfer-cli\src\main.rs:1256:
+  desktop\p2ptransfer-cli\src\main.rs:1257:    // --- ECDH Handshake ---
+  desktop\p2ptransfer-cli\src\main.rs:1258:    let (tag, client_pub_raw) = receive_tagged(&mut stream).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1259:    if tag != TAG_CLIENT_HELLO {
+  desktop\p2ptransfer-cli\src\main.rs:1260:        send_tagged(&mut stream, TAG_ERROR, b"Expected 
+CLIENT_HELLO").await?;
+  desktop\p2ptransfer-cli\src\main.rs:1261:        anyhow::bail!("Expected CLIENT_HELLO, got tag={tag}");
+  desktop\p2ptransfer-cli\src\main.rs:1262:    }
+  desktop\p2ptransfer-cli\src\main.rs:1263:    let client_pub_bytes: [u8; 32] = client_pub_raw
+  desktop\p2ptransfer-cli\src\main.rs:1264:        .as_slice()
+  desktop\p2ptransfer-cli\src\main.rs:1265:        .try_into()
+  desktop\p2ptransfer-cli\src\main.rs:1266:        .map_err(|_| anyhow::anyhow!("Invalid client public key length"))?;
+  desktop\p2ptransfer-cli\src\main.rs:1267:    let kx = EcdhKeyExchange::new();
+  desktop\p2ptransfer-cli\src\main.rs:1268:    let server_pub = kx.public_key_bytes();
+  desktop\p2ptransfer-cli\src\main.rs:1269:    send_tagged(&mut stream, TAG_SERVER_HELLO, &server_pub).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1270:    let shared_secret = kx.derive_shared_secret(&client_pub_bytes)?;
+  desktop\p2ptransfer-cli\src\main.rs:1271:    let enc_key =
+  desktop\p2ptransfer-cli\src\main.rs:1272:        aead::derive_encryption_key(&shared_secret, b"P2PTRANSFER_SALT_v1", 
+b"p2ptransfer-v1-encryption")?;
+  desktop\p2ptransfer-cli\src\main.rs:1273:
+  desktop\p2ptransfer-cli\src\main.rs:1274:    // --- Read metadata ---
+  desktop\p2ptransfer-cli\src\main.rs:1275:    let (tag, payload) = receive_tagged(&mut stream).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1276:    if tag != TAG_METADATA {
+  desktop\p2ptransfer-cli\src\main.rs:1277:        send_tagged(&mut stream, TAG_ERROR, b"Expected METADATA").await?;
+  desktop\p2ptransfer-cli\src\main.rs:1278:        anyhow::bail!("Expected METADATA, got tag={tag}");
+  desktop\p2ptransfer-cli\src\main.rs:1279:    }
+  desktop\p2ptransfer-cli\src\main.rs:1280:    let metadata: TransferMetadata = serde_json::from_slice(&payload)?;
+  desktop\p2ptransfer-cli\src\main.rs:1281:    let nonce_prefix = metadata.nonce_prefix;
+  desktop\p2ptransfer-cli\src\main.rs:1282:    info!("Slow-receive: {} from {addr}", metadata.file_name);
+  desktop\p2ptransfer-cli\src\main.rs:1283:
+  desktop\p2ptransfer-cli\src\main.rs:1284:    send_tagged(&mut stream, TAG_METADATA, b"ACCEPT").await?;
+  desktop\p2ptransfer-cli\src\main.rs:1285:
+  desktop\p2ptransfer-cli\src\main.rs:1286:    let output_path = output_dir.join(&metadata.file_name);
+  desktop\p2ptransfer-cli\src\main.rs:1287:    resume_manager.create_transfer(
+  desktop\p2ptransfer-cli\src\main.rs:1288:        &addr.to_string(),
+  desktop\p2ptransfer-cli\src\main.rs:1289:        &output_path.to_string_lossy(),
+  desktop\p2ptransfer-cli\src\main.rs:1290:        metadata.file_size as i64,
+  desktop\p2ptransfer-cli\src\main.rs:1291:    )?;
+  desktop\p2ptransfer-cli\src\main.rs:1292:
+  desktop\p2ptransfer-cli\src\main.rs:1293:    let engine = TransferEngine::new(4);
+  desktop\p2ptransfer-cli\src\main.rs:1294:
+  desktop\p2ptransfer-cli\src\main.rs:1295:    // --- Receive chunks with delay ---
+  desktop\p2ptransfer-cli\src\main.rs:1296:    for chunk_index in 0..metadata.total_chunks {
+  desktop\p2ptransfer-cli\src\main.rs:1297:        tokio::time::sleep(Duration::from_millis(chunk_delay_ms)).await;
+  desktop\p2ptransfer-cli\src\main.rs:1298:
+  desktop\p2ptransfer-cli\src\main.rs:1299:        let (tag, payload) = receive_tagged(&mut stream).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1300:        if tag == TAG_ERROR {
+  desktop\p2ptransfer-cli\src\main.rs:1301:            anyhow::bail!("Peer sent error");
+  desktop\p2ptransfer-cli\src\main.rs:1302:        }
+  desktop\p2ptransfer-cli\src\main.rs:1303:        if tag != TAG_CHUNK {
+  desktop\p2ptransfer-cli\src\main.rs:1304:            anyhow::bail!("Expected CHUNK, got tag={tag}");
+  desktop\p2ptransfer-cli\src\main.rs:1305:        }
+  desktop\p2ptransfer-cli\src\main.rs:1306:        if payload.len() < 5 {
+  desktop\p2ptransfer-cli\src\main.rs:1307:            anyhow::bail!("Malformed chunk");
+  desktop\p2ptransfer-cli\src\main.rs:1308:        }
+  desktop\p2ptransfer-cli\src\main.rs:1309:
+  desktop\p2ptransfer-cli\src\main.rs:1310:        let recv_index = 
+u32::from_le_bytes(payload[..4].try_into().unwrap()) as u64;
+  desktop\p2ptransfer-cli\src\main.rs:1311:        if recv_index != chunk_index {
+  desktop\p2ptransfer-cli\src\main.rs:1312:            anyhow::bail!("Chunk index mismatch: expected {chunk_index}, 
+got {recv_index}");
+  desktop\p2ptransfer-cli\src\main.rs:1313:        }
+  desktop\p2ptransfer-cli\src\main.rs:1314:
+  desktop\p2ptransfer-cli\src\main.rs:1315:        let compressed = payload[4] != 0;
+  desktop\p2ptransfer-cli\src\main.rs:1316:        let nonce = aead::build_nonce(&nonce_prefix, chunk_index);
+  desktop\p2ptransfer-cli\src\main.rs:1352:    }
+  desktop\p2ptransfer-cli\src\main.rs:1353:
+  desktop\p2ptransfer-cli\src\main.rs:1354:    Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:1355:}
+  desktop\p2ptransfer-cli\src\main.rs:1356:
+> desktop\p2ptransfer-cli\src\main.rs:1357:struct ReceiverHandler {
+  desktop\p2ptransfer-cli\src\main.rs:1358:    resume_manager: Arc<TransferResumeManager>,
+  desktop\p2ptransfer-cli\src\main.rs:1359:    output_dir: PathBuf,
+  desktop\p2ptransfer-cli\src\main.rs:1360:}
+  desktop\p2ptransfer-cli\src\main.rs:1361:
+> desktop\p2ptransfer-cli\src\main.rs:1362:impl ReceiverHandler {
+  desktop\p2ptransfer-cli\src\main.rs:1363:    async fn run(self, mut stream: TcpStream, addr: SocketAddr) -> 
+Result<()> {
+  desktop\p2ptransfer-cli\src\main.rs:1364:        set_nodelay(&stream);
+  desktop\p2ptransfer-cli\src\main.rs:1365:        // --- Step 0: ECDH Handshake (before metadata) ---
+  desktop\p2ptransfer-cli\src\main.rs:1366:        let (tag, client_pub_raw) = receive_tagged(&mut stream).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1367:        if tag == TAG_ERROR {
+  desktop\p2ptransfer-cli\src\main.rs:1368:            return Ok(());
+  desktop\p2ptransfer-cli\src\main.rs:1369:        }
+  desktop\p2ptransfer-cli\src\main.rs:1370:        if tag != TAG_CLIENT_HELLO {
+  desktop\p2ptransfer-cli\src\main.rs:1371:            send_tagged(&mut stream, TAG_ERROR, b"Expected 
+CLIENT_HELLO").await?;
+  desktop\p2ptransfer-cli\src\main.rs:1372:            anyhow::bail!("Expected CLIENT_HELLO, got tag={tag}");
+  desktop\p2ptransfer-cli\src\main.rs:1373:        }
+  desktop\p2ptransfer-cli\src\main.rs:1374:        let client_pub_bytes: [u8; 32] = client_pub_raw
+  desktop\p2ptransfer-cli\src\main.rs:1375:            .as_slice()
+  desktop\p2ptransfer-cli\src\main.rs:1376:            .try_into()
+  desktop\p2ptransfer-cli\src\main.rs:1377:            .map_err(|_| anyhow::anyhow!("Invalid client public key 
+length"))?;
+  desktop\p2ptransfer-cli\src\main.rs:1378:
+  desktop\p2ptransfer-cli\src\main.rs:1379:        let kx = EcdhKeyExchange::new();
+  desktop\p2ptransfer-cli\src\main.rs:1380:        let server_pub = kx.public_key_bytes();
+  desktop\p2ptransfer-cli\src\main.rs:1381:        send_tagged(&mut stream, TAG_SERVER_HELLO, &server_pub).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1382:
+  desktop\p2ptransfer-cli\src\main.rs:1383:        let shared_secret = kx.derive_shared_secret(&client_pub_bytes)?;
+  desktop\p2ptransfer-cli\src\main.rs:1384:        let enc_key =
+  desktop\p2ptransfer-cli\src\main.rs:1385:            aead::derive_encryption_key(&shared_secret, 
+b"P2PTRANSFER_SALT_v1", b"p2ptransfer-v1-encryption")?;
+  desktop\p2ptransfer-cli\src\main.rs:1386:
+  desktop\p2ptransfer-cli\src\main.rs:1387:        // --- Step 1: Read metadata ---
+  desktop\p2ptransfer-cli\src\main.rs:1388:        let (tag, payload) = receive_tagged(&mut stream).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1389:        if tag == TAG_ERROR {
+  desktop\p2ptransfer-cli\src\main.rs:1390:            return Ok(()); // peer sent error, nothing to do
+  desktop\p2ptransfer-cli\src\main.rs:1391:        }
+  desktop\p2ptransfer-cli\src\main.rs:1392:        if tag != TAG_METADATA {
+  desktop\p2ptransfer-cli\src\main.rs:1393:            send_tagged(
+  desktop\p2ptransfer-cli\src\main.rs:1394:                &mut stream,
+  desktop\p2ptransfer-cli\src\main.rs:1395:                TAG_ERROR,
+  desktop\p2ptransfer-cli\src\main.rs:1396:                b"Expected METADATA as first message",
+  desktop\p2ptransfer-cli\src\main.rs:1397:            )
+  desktop\p2ptransfer-cli\src\main.rs:1398:            .await?;
+  desktop\p2ptransfer-cli\src\main.rs:1399:            anyhow::bail!("Expected METADATA, got tag={tag}");
+  desktop\p2ptransfer-cli\src\main.rs:1400:        }
+  desktop\p2ptransfer-cli\src\main.rs:1401:
+  desktop\p2ptransfer-cli\src\main.rs:1402:        let metadata: TransferMetadata =
+  desktop\p2ptransfer-cli\src\main.rs:1403:            serde_json::from_slice(&payload).context("Failed to parse 
+TransferMetadata")?;
+  desktop\p2ptransfer-cli\src\main.rs:1404:        let nonce_prefix = metadata.nonce_prefix;
+  desktop\p2ptransfer-cli\src\main.rs:1405:        info!("Incoming transfer: {} from {addr}", metadata.file_name);
+  desktop\p2ptransfer-cli\src\main.rs:1406:
+  desktop\p2ptransfer-cli\src\main.rs:1407:        // Accept the transfer
+  desktop\p2ptransfer-cli\src\main.rs:1408:        send_tagged(&mut stream, TAG_METADATA, b"ACCEPT").await?;
+  desktop\p2ptransfer-cli\src\main.rs:1409:
+  desktop\p2ptransfer-cli\src\main.rs:1410:        let output_path = self.output_dir.join(&metadata.file_name);
+  desktop\p2ptransfer-cli\src\main.rs:1411:        let session_id = metadata.session_id.clone();
+  desktop\p2ptransfer-cli\src\main.rs:1412:
+  desktop\p2ptransfer-cli\src\main.rs:1413:        let start_chunk = if metadata.is_resume {
+  desktop\p2ptransfer-cli\src\main.rs:1414:            let offset_bytes = metadata.resume_offset;
+  desktop\p2ptransfer-cli\src\main.rs:1415:            (offset_bytes / metadata.chunk_size as 
+u64).min(metadata.total_chunks - 1)
+  desktop\p2ptransfer-cli\src\main.rs:1416:        } else {
+  desktop\p2ptransfer-cli\src\main.rs:1417:            0
+  desktop\p2ptransfer-cli\src\main.rs:1418:        };
+  desktop\p2ptransfer-cli\src\main.rs:1419:
+  desktop\p2ptransfer-cli\src\main.rs:1420:        self.resume_manager.create_transfer(
+  desktop\p2ptransfer-cli\src\main.rs:1421:            &addr.to_string(),
+  desktop\p2ptransfer-cli\src\main.rs:1422:            &output_path.to_string_lossy(),
+  desktop\p2ptransfer-cli\src\main.rs:1423:            metadata.file_size as i64,
+  desktop\p2ptransfer-cli\src\main.rs:1424:        )?;
+  desktop\p2ptransfer-cli\src\main.rs:1425:
+  desktop\p2ptransfer-cli\src\main.rs:1426:        let engine = Arc::new(TransferEngine::new(4));
+  desktop\p2ptransfer-cli\src\main.rs:1427:        let mut bytes_received: i64 = (start_chunk * metadata.chunk_size as 
+u64) as i64;
+  desktop\p2ptransfer-cli\src\main.rs:1428:
+  desktop\p2ptransfer-cli\src\main.rs:1429:            if let Some(parent) = output_path.parent() {
+  desktop\p2ptransfer-cli\src\main.rs:1430:                tokio::fs::create_dir_all(parent).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1431:            }
+  desktop\p2ptransfer-cli\src\main.rs:1432:            let mut file = tokio::fs::OpenOptions::new()
+  desktop\p2ptransfer-cli\src\main.rs:1433:                .create(true)
+  desktop\p2ptransfer-cli\src\main.rs:1434:                .truncate(false)
+  desktop\p2ptransfer-cli\src\main.rs:1435:                .write(true)
+  desktop\p2ptransfer-cli\src\main.rs:1436:                .open(&output_path)
+  desktop\p2ptransfer-cli\src\main.rs:1437:                .await
+  desktop\p2ptransfer-cli\src\main.rs:1438:                .context("Failed to open output file")?;
+  desktop\p2ptransfer-cli\src\main.rs:1439:            
+  desktop\p2ptransfer-cli\src\main.rs:1440:            file.set_len(metadata.file_size).await.context("Failed to 
+preallocate file size")?;
+  desktop\p2ptransfer-cli\src\main.rs:1441:            let file_mutex = Arc::new(tokio::sync::Mutex::new(file));
+  desktop\p2ptransfer-cli\src\main.rs:1442:
+  desktop\p2ptransfer-cli\src\main.rs:1443:            let (mut rh, mut wh) = stream.into_split();
+  desktop\p2ptransfer-cli\src\main.rs:1444:            let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel(32);
+  desktop\p2ptransfer-cli\src\main.rs:1445:            
+  desktop\p2ptransfer-cli\src\main.rs:1446:            let mut reader_task = tokio::spawn(async move {
+  desktop\p2ptransfer-cli\src\main.rs:1447:                loop {
+  desktop\p2ptransfer-cli\src\main.rs:1448:                    match receive_tagged(&mut rh).await {
+  desktop\p2ptransfer-cli\src\main.rs:1449:                        Ok((tag, payload)) => {
+  desktop\p2ptransfer-cli\src\main.rs:1450:                            if chunk_tx.send(Ok((tag, 
+payload))).await.is_err() {
+  desktop\p2ptransfer-cli\src\main.rs:1451:                                break;
+  desktop\p2ptransfer-cli\src\main.rs:1452:                            }
+  desktop\p2ptransfer-cli\src\main.rs:1453:                        }
+  desktop\p2ptransfer-cli\src\main.rs:1454:                        Err(e) => {
+  desktop\p2ptransfer-cli\src\main.rs:1455:                            let _ = chunk_tx.send(Err(e)).await;
+  desktop\p2ptransfer-cli\src\main.rs:1456:                            break;
+  desktop\p2ptransfer-cli\src\main.rs:1457:                        }
+  desktop\p2ptransfer-cli\src\main.rs:1458:                    }
+  desktop\p2ptransfer-cli\src\main.rs:1459:                }
+  desktop\p2ptransfer-cli\src\main.rs:1460:                rh
+  desktop\p2ptransfer-cli\src\main.rs:1461:            });
+  desktop\p2ptransfer-cli\src\main.rs:1462:
+
+

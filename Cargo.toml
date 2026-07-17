@@ -4,7 +4,7 @@ members = [
     "p2ptransfer-core",
     "desktop/p2ptransfer-cli",
     "desktop/p2ptransfer-gui/src-tauri",
-    "mobile/p2ptransfer-ffi",
+    "mobile/p2ptransfer-ffi", "patcher_proj",
 ]
 
 [workspace.package]
@@ -37,3 +37,8 @@ indicatif = "0.17"
 dirs = "5"
 toml = "0.8"
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.24"
+hmac = "0.12"
+subtle = "2"
+rand = "0.8"

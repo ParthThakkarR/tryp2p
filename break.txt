@@ -1,0 +1,361 @@
+﻿
+> desktop\p2ptransfer-cli\src\main.rs:837:                                    if 
+ack_tx_clone.send(acked_index).await.is_err() { break; }
+  desktop\p2ptransfer-cli\src\main.rs:838:                                }
+  desktop\p2ptransfer-cli\src\main.rs:839:                            } else if tag == TAG_COMPLETE || tag == 
+TAG_ERROR {
+  desktop\p2ptransfer-cli\src\main.rs:840:                                let _ = error_tx_clone.send((tag, 
+payload)).await;
+> desktop\p2ptransfer-cli\src\main.rs:841:                                break;
+  desktop\p2ptransfer-cli\src\main.rs:842:                            }
+  desktop\p2ptransfer-cli\src\main.rs:843:                        }
+  desktop\p2ptransfer-cli\src\main.rs:844:                        Err(e) => {
+  desktop\p2ptransfer-cli\src\main.rs:845:                            let _ = error_tx_clone.send((TAG_ERROR, 
+e.to_string().into_bytes())).await;
+> desktop\p2ptransfer-cli\src\main.rs:846:                            break;
+  desktop\p2ptransfer-cli\src\main.rs:847:                        }
+  desktop\p2ptransfer-cli\src\main.rs:848:                    }
+  desktop\p2ptransfer-cli\src\main.rs:849:                }
+  desktop\p2ptransfer-cli\src\main.rs:850:            });
+  desktop\p2ptransfer-cli\src\main.rs:851:            
+  desktop\p2ptransfer-cli\src\main.rs:852:            let semaphore = global_semaphore.clone();
+  desktop\p2ptransfer-cli\src\main.rs:853:            let next_chunk = next_chunk.clone();
+  desktop\p2ptransfer-cli\src\main.rs:854:            let engine = engine.clone();
+  desktop\p2ptransfer-cli\src\main.rs:855:            let path = file_path.clone();
+  desktop\p2ptransfer-cli\src\main.rs:856:            let metadata = metadata.clone();
+  desktop\p2ptransfer-cli\src\main.rs:857:            let enc_key = enc_key;
+  desktop\p2ptransfer-cli\src\main.rs:858:            let nonce_prefix = nonce_prefix;
+  desktop\p2ptransfer-cli\src\main.rs:859:            let error_tx_clone2 = error_tx.clone();
+  desktop\p2ptransfer-cli\src\main.rs:860:            
+  desktop\p2ptransfer-cli\src\main.rs:861:            join_set.spawn(async move {
+  desktop\p2ptransfer-cli\src\main.rs:862:                loop {
+  desktop\p2ptransfer-cli\src\main.rs:863:                    let permit = match 
+semaphore.clone().acquire_owned().await {
+  desktop\p2ptransfer-cli\src\main.rs:864:                        Ok(p) => p,
+  desktop\p2ptransfer-cli\src\main.rs:865:                        Err(_) => break,
+  desktop\p2ptransfer-cli\src\main.rs:866:                    };
+> desktop\p2ptransfer-cli\src\main.rs:870:                        break;
+  desktop\p2ptransfer-cli\src\main.rs:871:                    }
+  desktop\p2ptransfer-cli\src\main.rs:872:                    
+  desktop\p2ptransfer-cli\src\main.rs:873:                    let chunk_data_res = engine.prepare_chunk(&path, 
+&metadata, chunk_index).await;
+  desktop\p2ptransfer-cli\src\main.rs:874:                    if let Ok(chunk_data) = chunk_data_res {
+  desktop\p2ptransfer-cli\src\main.rs:875:                        let chunk_len = chunk_data.len();
+  desktop\p2ptransfer-cli\src\main.rs:876:                        let should_compress = chunk_len >= 64 && 
+!p2ptransfer_core::compress::detector::is_likely_compressed(&path, &chunk_data);
+  desktop\p2ptransfer-cli\src\main.rs:877:                        
+  desktop\p2ptransfer-cli\src\main.rs:878:                        let frame_res = tokio::task::spawn_blocking(move || 
+-> Result<Vec<u8>> {
+  desktop\p2ptransfer-cli\src\main.rs:879:                            let payload = if should_compress && compression 
+> 0 {
+  desktop\p2ptransfer-cli\src\main.rs:880:                                
+p2ptransfer_core::compress::zstd::compress(&chunk_data, compression)?
+  desktop\p2ptransfer-cli\src\main.rs:881:                            } else {
+  desktop\p2ptransfer-cli\src\main.rs:882:                                chunk_data
+  desktop\p2ptransfer-cli\src\main.rs:883:                            };
+  desktop\p2ptransfer-cli\src\main.rs:884:                            let compressed_flag: u8 = if should_compress && 
+compression > 0 { 1 } else { 0 };
+  desktop\p2ptransfer-cli\src\main.rs:885:                            let nonce = aead::build_nonce(&nonce_prefix, 
+chunk_index);
+  desktop\p2ptransfer-cli\src\main.rs:886:                            let encrypted_payload = aead::encrypt(&enc_key, 
+&nonce, &payload)?;
+  desktop\p2ptransfer-cli\src\main.rs:887:                            
+  desktop\p2ptransfer-cli\src\main.rs:888:                            let mut chunk_frame = Vec::with_capacity(5 + 
+encrypted_payload.len());
+  desktop\p2ptransfer-cli\src\main.rs:889:                            chunk_frame.extend_from_slice(&(chunk_index as 
+u32).to_le_bytes());
+  desktop\p2ptransfer-cli\src\main.rs:890:                            chunk_frame.push(compressed_flag);
+> desktop\p2ptransfer-cli\src\main.rs:900:                                    break;
+  desktop\p2ptransfer-cli\src\main.rs:901:                                }
+  desktop\p2ptransfer-cli\src\main.rs:902:                                permit.forget();
+  desktop\p2ptransfer-cli\src\main.rs:903:                            }
+  desktop\p2ptransfer-cli\src\main.rs:904:                            _ => {
+  desktop\p2ptransfer-cli\src\main.rs:905:                                let _ = error_tx_clone2.send((TAG_ERROR, 
+b"Prepare failed".to_vec())).await;
+> desktop\p2ptransfer-cli\src\main.rs:906:                                break;
+  desktop\p2ptransfer-cli\src\main.rs:907:                            }
+  desktop\p2ptransfer-cli\src\main.rs:908:                        }
+  desktop\p2ptransfer-cli\src\main.rs:909:                    } else {
+  desktop\p2ptransfer-cli\src\main.rs:910:                        let _ = error_tx_clone2.send((TAG_ERROR, b"Read 
+failed".to_vec())).await;
+> desktop\p2ptransfer-cli\src\main.rs:911:                        break;
+  desktop\p2ptransfer-cli\src\main.rs:912:                    }
+  desktop\p2ptransfer-cli\src\main.rs:913:                }
+  desktop\p2ptransfer-cli\src\main.rs:914:            });
+  desktop\p2ptransfer-cli\src\main.rs:915:        }
+  desktop\p2ptransfer-cli\src\main.rs:916:        
+  desktop\p2ptransfer-cli\src\main.rs:917:        let mut acks_received = 0;
+  desktop\p2ptransfer-cli\src\main.rs:918:        let total_to_send = metadata.total_chunks - current_start_chunk;
+  desktop\p2ptransfer-cli\src\main.rs:919:        let mut pipeline_error = None;
+  desktop\p2ptransfer-cli\src\main.rs:920:        let mut final_complete = None;
+  desktop\p2ptransfer-cli\src\main.rs:921:        
+  desktop\p2ptransfer-cli\src\main.rs:922:        loop {
+  desktop\p2ptransfer-cli\src\main.rs:923:            if acks_received == total_to_send {
+> desktop\p2ptransfer-cli\src\main.rs:924:                if final_complete.is_some() { break; }
+  desktop\p2ptransfer-cli\src\main.rs:925:            }
+  desktop\p2ptransfer-cli\src\main.rs:926:            
+  desktop\p2ptransfer-cli\src\main.rs:927:            tokio::select! {
+  desktop\p2ptransfer-cli\src\main.rs:928:                Some(acked_idx) = ack_rx.recv() => {
+  desktop\p2ptransfer-cli\src\main.rs:929:                    acks_received += 1;
+  desktop\p2ptransfer-cli\src\main.rs:930:                    current_start_chunk = current_start_chunk.max(acked_idx 
++ 1);
+  desktop\p2ptransfer-cli\src\main.rs:931:                    global_semaphore.add_permits(1);
+  desktop\p2ptransfer-cli\src\main.rs:932:                    
+  desktop\p2ptransfer-cli\src\main.rs:933:                    pb.inc(metadata.chunk_size as u64);
+  desktop\p2ptransfer-cli\src\main.rs:934:                    bytes_sent_atomic.fetch_add(metadata.chunk_size as i64, 
+Ordering::SeqCst);
+  desktop\p2ptransfer-cli\src\main.rs:935:                    let _ = resume_manager.update_progress(&session_id, 
+bytes_sent_atomic.load(Ordering::SeqCst));
+  desktop\p2ptransfer-cli\src\main.rs:936:                    
+  desktop\p2ptransfer-cli\src\main.rs:937:                    if acks_received == total_to_send && 
+final_complete.is_some() {
+> desktop\p2ptransfer-cli\src\main.rs:938:                        break;
+  desktop\p2ptransfer-cli\src\main.rs:939:                    }
+  desktop\p2ptransfer-cli\src\main.rs:940:                }
+  desktop\p2ptransfer-cli\src\main.rs:941:                Some((tag, payload)) = error_rx.recv() => {
+  desktop\p2ptransfer-cli\src\main.rs:942:                    if tag == TAG_COMPLETE {
+  desktop\p2ptransfer-cli\src\main.rs:943:                        final_complete = Some(payload);
+> desktop\p2ptransfer-cli\src\main.rs:944:                        if acks_received == total_to_send { break; }
+  desktop\p2ptransfer-cli\src\main.rs:945:                    } else {
+  desktop\p2ptransfer-cli\src\main.rs:946:                        pipeline_error = Some(anyhow::anyhow!("Pipeline 
+error: {}", String::from_utf8_lossy(&payload)));
+> desktop\p2ptransfer-cli\src\main.rs:947:                        break;
+  desktop\p2ptransfer-cli\src\main.rs:948:                    }
+  desktop\p2ptransfer-cli\src\main.rs:949:                }
+  desktop\p2ptransfer-cli\src\main.rs:950:            }
+  desktop\p2ptransfer-cli\src\main.rs:951:        }
+  desktop\p2ptransfer-cli\src\main.rs:952:        
+  desktop\p2ptransfer-cli\src\main.rs:953:        join_set.abort_all();
+  desktop\p2ptransfer-cli\src\main.rs:954:        
+  desktop\p2ptransfer-cli\src\main.rs:955:        if let Some(e) = pipeline_error {
+  desktop\p2ptransfer-cli\src\main.rs:956:            warn!("Pipeline broken: {e:?}. Reconnecting in 2s...");
+  desktop\p2ptransfer-cli\src\main.rs:957:            tokio::time::sleep(Duration::from_secs(2)).await;
+  desktop\p2ptransfer-cli\src\main.rs:958:            return Err(anyhow::anyhow!("Transfer interrupted, please restart 
+to resume"));
+  desktop\p2ptransfer-cli\src\main.rs:959:        }
+  desktop\p2ptransfer-cli\src\main.rs:960:        
+  desktop\p2ptransfer-cli\src\main.rs:961:        if let Some(response) = final_complete {
+  desktop\p2ptransfer-cli\src\main.rs:962:            let recv_hash = &response[..response.len().min(32)];
+  desktop\p2ptransfer-cli\src\main.rs:963:            let expected = &metadata.checksum[..];
+  desktop\p2ptransfer-cli\src\main.rs:964:            if recv_hash != expected {
+  desktop\p2ptransfer-cli\src\main.rs:965:                resume_manager.fail_transfer(&session_id)?;
+  desktop\p2ptransfer-cli\src\main.rs:966:                anyhow::bail!("Checksum mismatch: receiver hash differs from 
+sender");
+  desktop\p2ptransfer-cli\src\main.rs:967:            }
+> desktop\p2ptransfer-cli\src\main.rs:975:        break;
+  desktop\p2ptransfer-cli\src\main.rs:976:
+  desktop\p2ptransfer-cli\src\main.rs:977:        Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:978:}
+  desktop\p2ptransfer-cli\src\main.rs:979:
+  desktop\p2ptransfer-cli\src\main.rs:980:async fn cmd_receive_link(
+  desktop\p2ptransfer-cli\src\main.rs:981:    link: String,
+  desktop\p2ptransfer-cli\src\main.rs:982:    output: Option<String>,
+  desktop\p2ptransfer-cli\src\main.rs:983:    concurrency: usize,
+  desktop\p2ptransfer-cli\src\main.rs:984:    config: &P2pConfig,
+  desktop\p2ptransfer-cli\src\main.rs:985:) -> Result<()> {
+  desktop\p2ptransfer-cli\src\main.rs:986:    let client = reqwest::Client::new();
+  desktop\p2ptransfer-cli\src\main.rs:987:    let manifest_url = format!("{}/manifest.json", link);
+  desktop\p2ptransfer-cli\src\main.rs:988:    
+  desktop\p2ptransfer-cli\src\main.rs:989:    let mut resp = None;
+  desktop\p2ptransfer-cli\src\main.rs:990:    for i in 0..15 {
+  desktop\p2ptransfer-cli\src\main.rs:991:        match client.get(&manifest_url).send().await {
+  desktop\p2ptransfer-cli\src\main.rs:992:            Ok(r) if r.status().as_u16() == 502 || r.status().as_u16() == 
+522 || r.status().as_u16() == 530 => {
+  desktop\p2ptransfer-cli\src\main.rs:993:                if i == 0 {
+  desktop\p2ptransfer-cli\src\main.rs:994:                    println!("Waiting for sender to become ready (this can 
+take a few minutes on Windows)...");
+  desktop\p2ptransfer-cli\src\main.rs:995:                }
+> desktop\p2ptransfer-cli\src\main.rs:1000:                break;
+  desktop\p2ptransfer-cli\src\main.rs:1001:            }
+  desktop\p2ptransfer-cli\src\main.rs:1002:            Ok(r) => anyhow::bail!("Failed to fetch manifest: HTTP {}", 
+r.status()),
+  desktop\p2ptransfer-cli\src\main.rs:1003:            Err(e) => {
+  desktop\p2ptransfer-cli\src\main.rs:1004:                if e.is_timeout() || e.is_connect() || e.is_request() {
+  desktop\p2ptransfer-cli\src\main.rs:1005:                    if i == 0 {
+  desktop\p2ptransfer-cli\src\main.rs:1006:                        println!("Waiting for sender to become ready (this 
+can take a few minutes on Windows)...");
+  desktop\p2ptransfer-cli\src\main.rs:1007:                    }
+  desktop\p2ptransfer-cli\src\main.rs:1008:                    
+tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+  desktop\p2ptransfer-cli\src\main.rs:1009:                } else {
+  desktop\p2ptransfer-cli\src\main.rs:1010:                    anyhow::bail!("Failed to fetch manifest: {e}");
+  desktop\p2ptransfer-cli\src\main.rs:1011:                }
+  desktop\p2ptransfer-cli\src\main.rs:1012:            }
+  desktop\p2ptransfer-cli\src\main.rs:1013:        }
+  desktop\p2ptransfer-cli\src\main.rs:1014:    }
+  desktop\p2ptransfer-cli\src\main.rs:1015:    
+  desktop\p2ptransfer-cli\src\main.rs:1016:    let resp = resp.context("Timeout waiting for sender to become ready")?;
+  desktop\p2ptransfer-cli\src\main.rs:1017:    let manifest: serde_json::Value = resp.json().await?;
+  desktop\p2ptransfer-cli\src\main.rs:1018:    
+  desktop\p2ptransfer-cli\src\main.rs:1019:    let filename = manifest["filename"].as_str().context("Missing filename 
+in manifest")?;
+  desktop\p2ptransfer-cli\src\main.rs:1020:    let size = manifest["size"].as_u64().context("Missing size in 
+manifest")?;
+> desktop\p2ptransfer-cli\src\main.rs:1134:            if n == 0 { break; }
+  desktop\p2ptransfer-cli\src\main.rs:1135:            hasher.update(&buf[..n]);
+  desktop\p2ptransfer-cli\src\main.rs:1136:        }
+  desktop\p2ptransfer-cli\src\main.rs:1137:        let hash_result = hex::encode(hasher.finalize().as_bytes());
+  desktop\p2ptransfer-cli\src\main.rs:1138:        Ok(hash_result == expected_hash)
+  desktop\p2ptransfer-cli\src\main.rs:1139:    }).await??;
+  desktop\p2ptransfer-cli\src\main.rs:1140:
+  desktop\p2ptransfer-cli\src\main.rs:1141:    if !hash_match {
+  desktop\p2ptransfer-cli\src\main.rs:1142:        anyhow::bail!("Checksum mismatch!");
+  desktop\p2ptransfer-cli\src\main.rs:1143:    }
+  desktop\p2ptransfer-cli\src\main.rs:1144:    
+  desktop\p2ptransfer-cli\src\main.rs:1145:    println!("✅ Verified checksum. File saved to {}", final_path.display());
+  desktop\p2ptransfer-cli\src\main.rs:1146:    Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:1147:}
+  desktop\p2ptransfer-cli\src\main.rs:1148:
+  desktop\p2ptransfer-cli\src\main.rs:1149:async fn cmd_listen(
+  desktop\p2ptransfer-cli\src\main.rs:1150:    port: u16,
+  desktop\p2ptransfer-cli\src\main.rs:1151:    output_dir_opt: Option<String>,
+  desktop\p2ptransfer-cli\src\main.rs:1152:    install_autostart: bool,
+  desktop\p2ptransfer-cli\src\main.rs:1153:    config: &P2pConfig,
+  desktop\p2ptransfer-cli\src\main.rs:1154:) -> Result<()> {
+> desktop\p2ptransfer-cli\src\main.rs:1231:                break;
+  desktop\p2ptransfer-cli\src\main.rs:1232:            }
+  desktop\p2ptransfer-cli\src\main.rs:1233:        }
+  desktop\p2ptransfer-cli\src\main.rs:1234:    }
+  desktop\p2ptransfer-cli\src\main.rs:1235:
+  desktop\p2ptransfer-cli\src\main.rs:1236:    Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:1237:}
+  desktop\p2ptransfer-cli\src\main.rs:1238:
+  desktop\p2ptransfer-cli\src\main.rs:1239:
+  desktop\p2ptransfer-cli\src\main.rs:1240:async fn cmd_slow_receive(output: String, chunk_delay_ms: u64, config: 
+&P2pConfig) -> Result<()> {
+  desktop\p2ptransfer-cli\src\main.rs:1241:    let resume_manager = Arc::new(
+  desktop\p2ptransfer-cli\src\main.rs:1242:        TransferResumeManager::new(config.data_dir.join("resume"))
+  desktop\p2ptransfer-cli\src\main.rs:1243:            .context("Failed to initialize resume manager")?,
+  desktop\p2ptransfer-cli\src\main.rs:1244:    );
+  desktop\p2ptransfer-cli\src\main.rs:1245:
+  desktop\p2ptransfer-cli\src\main.rs:1246:    let listener = TcpListener::bind(format!("0.0.0.0:{}", 
+DEFAULT_TCP_PORT))
+  desktop\p2ptransfer-cli\src\main.rs:1247:        .await
+  desktop\p2ptransfer-cli\src\main.rs:1248:        .context("Failed to bind TCP listener")?;
+  desktop\p2ptransfer-cli\src\main.rs:1249:    println!(
+  desktop\p2ptransfer-cli\src\main.rs:1250:        "Slow receiver listening on port {DEFAULT_TCP_PORT} ({}ms delay per 
+chunk)",
+  desktop\p2ptransfer-cli\src\main.rs:1251:        chunk_delay_ms
+> desktop\p2ptransfer-cli\src\main.rs:1464:                    Ok((tag, payload)) => { if chunk_tx.send(Ok((tag, 
+payload))).await.is_err() { break; } }
+> desktop\p2ptransfer-cli\src\main.rs:1465:                    Err(e) => { let _ = chunk_tx.send(Err(e)).await; break; 
+}
+  desktop\p2ptransfer-cli\src\main.rs:1466:                }
+  desktop\p2ptransfer-cli\src\main.rs:1467:            }
+  desktop\p2ptransfer-cli\src\main.rs:1468:            rh
+  desktop\p2ptransfer-cli\src\main.rs:1469:        });
+  desktop\p2ptransfer-cli\src\main.rs:1470:
+  desktop\p2ptransfer-cli\src\main.rs:1471:        let mut pipeline_error = None;
+  desktop\p2ptransfer-cli\src\main.rs:1472:        let mut join_set = tokio::task::JoinSet::new();
+  desktop\p2ptransfer-cli\src\main.rs:1473:
+  desktop\p2ptransfer-cli\src\main.rs:1474:        loop {
+  desktop\p2ptransfer-cli\src\main.rs:1475:            tokio::select! {
+  desktop\p2ptransfer-cli\src\main.rs:1476:                Some(res) = chunk_rx.recv() => {
+  desktop\p2ptransfer-cli\src\main.rs:1477:                    match res {
+  desktop\p2ptransfer-cli\src\main.rs:1478:                        Ok((tag, payload)) => {
+> desktop\p2ptransfer-cli\src\main.rs:1479:                            if tag == TAG_ERROR { pipeline_error = 
+Some(anyhow::anyhow!("Peer error")); break; }
+> desktop\p2ptransfer-cli\src\main.rs:1480:                            if tag != TAG_CHUNK || payload.len() < 5 { 
+pipeline_error = Some(anyhow::anyhow!("Malformed chunk")); break; }
+  desktop\p2ptransfer-cli\src\main.rs:1481:                            
+  desktop\p2ptransfer-cli\src\main.rs:1482:                            let recv_index = 
+u32::from_le_bytes(payload[..4].try_into().unwrap()) as u64;
+  desktop\p2ptransfer-cli\src\main.rs:1483:                            let compressed = payload[4] != 0;
+  desktop\p2ptransfer-cli\src\main.rs:1484:                            let encrypted_payload = payload[5..].to_vec();
+  desktop\p2ptransfer-cli\src\main.rs:1485:                            let enc_key = enc_key;
+  desktop\p2ptransfer-cli\src\main.rs:1486:                            let nonce_prefix = nonce_prefix;
+  desktop\p2ptransfer-cli\src\main.rs:1487:                            let chunk_size = metadata.chunk_size;
+  desktop\p2ptransfer-cli\src\main.rs:1488:                            let file_clone = file_mutex.clone();
+  desktop\p2ptransfer-cli\src\main.rs:1489:                            
+  desktop\p2ptransfer-cli\src\main.rs:1490:                            join_set.spawn(async move {
+  desktop\p2ptransfer-cli\src\main.rs:1491:                                let chunk_data = 
+tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+  desktop\p2ptransfer-cli\src\main.rs:1492:                                    let nonce = 
+aead::build_nonce(&nonce_prefix, recv_index);
+  desktop\p2ptransfer-cli\src\main.rs:1493:                                    let decrypted = aead::decrypt(&enc_key, 
+&nonce, &encrypted_payload)?;
+  desktop\p2ptransfer-cli\src\main.rs:1494:                                    if compressed {
+  desktop\p2ptransfer-cli\src\main.rs:1495:                                        
+Ok(p2ptransfer_core::compress::zstd::decompress(&decrypted)?)
+  desktop\p2ptransfer-cli\src\main.rs:1496:                                    } else {
+  desktop\p2ptransfer-cli\src\main.rs:1497:                                        Ok(decrypted)
+  desktop\p2ptransfer-cli\src\main.rs:1498:                                    }
+  desktop\p2ptransfer-cli\src\main.rs:1499:                                }).await??;
+  desktop\p2ptransfer-cli\src\main.rs:1500:                                
+> desktop\p2ptransfer-cli\src\main.rs:1508:                        Err(e) => { pipeline_error = Some(e); break; }
+  desktop\p2ptransfer-cli\src\main.rs:1509:                    }
+  desktop\p2ptransfer-cli\src\main.rs:1510:                }
+  desktop\p2ptransfer-cli\src\main.rs:1511:                Some(res) = join_set.join_next(), if !join_set.is_empty() 
+=> {
+  desktop\p2ptransfer-cli\src\main.rs:1512:                    match res {
+  desktop\p2ptransfer-cli\src\main.rs:1513:                        Ok(Ok((recv_index, len))) => {
+  desktop\p2ptransfer-cli\src\main.rs:1514:                            let mut ack = Vec::with_capacity(4);
+  desktop\p2ptransfer-cli\src\main.rs:1515:                            ack.extend_from_slice(&(recv_index as 
+u32).to_le_bytes());
+  desktop\p2ptransfer-cli\src\main.rs:1516:                            if let Err(e) = send_tagged(&mut wh, 
+TAG_CHUNK_ACK, &ack).await {
+  desktop\p2ptransfer-cli\src\main.rs:1517:                                pipeline_error = Some(e);
+> desktop\p2ptransfer-cli\src\main.rs:1518:                                break;
+  desktop\p2ptransfer-cli\src\main.rs:1519:                            }
+  desktop\p2ptransfer-cli\src\main.rs:1520:                            
+  desktop\p2ptransfer-cli\src\main.rs:1521:                            let old_count = 
+shared_state.chunks_received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+  desktop\p2ptransfer-cli\src\main.rs:1522:                            let _ = 
+shared_state.resume_manager.update_progress(&session_id, (old_count + 1) as i64 * metadata.chunk_size as i64);
+  desktop\p2ptransfer-cli\src\main.rs:1523:                            
+  desktop\p2ptransfer-cli\src\main.rs:1524:                            if old_count + 1 == metadata.total_chunks {
+  desktop\p2ptransfer-cli\src\main.rs:1525:                                let mut f = file_mutex.lock().await;
+  desktop\p2ptransfer-cli\src\main.rs:1526:                                f.seek(std::io::SeekFrom::Start(0)).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1527:                                let hash = tokio::task::spawn_blocking(move 
+|| {
+  desktop\p2ptransfer-cli\src\main.rs:1528:                                    let mut std_file = 
+f.try_clone().expect("Failed to clone file descriptor");
+  desktop\p2ptransfer-cli\src\main.rs:1529:                                    
+p2ptransfer_core::transfer::hasher::blake3_hash_reader(&mut std_file)
+  desktop\p2ptransfer-cli\src\main.rs:1530:                                }).await??;
+  desktop\p2ptransfer-cli\src\main.rs:1531:                                
+  desktop\p2ptransfer-cli\src\main.rs:1532:                                if hash != metadata.checksum {
+  desktop\p2ptransfer-cli\src\main.rs:1533:                                    send_tagged(&mut wh, TAG_ERROR, 
+b"Checksum mismatch").await?;
+  desktop\p2ptransfer-cli\src\main.rs:1534:                                    
+shared_state.resume_manager.fail_transfer(&session_id)?;
+  desktop\p2ptransfer-cli\src\main.rs:1535:                                } else {
+  desktop\p2ptransfer-cli\src\main.rs:1536:                                    send_tagged(&mut wh, TAG_COMPLETE, 
+&metadata.checksum).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1537:                                    
+shared_state.resume_manager.complete_transfer(&session_id, &format_hex(&metadata.checksum))?;
+  desktop\p2ptransfer-cli\src\main.rs:1538:                                }
+> desktop\p2ptransfer-cli\src\main.rs:1544:                                break;
+  desktop\p2ptransfer-cli\src\main.rs:1545:                            }
+  desktop\p2ptransfer-cli\src\main.rs:1546:                        }
+> desktop\p2ptransfer-cli\src\main.rs:1547:                        Ok(Err(e)) => { pipeline_error = Some(e); break; }
+> desktop\p2ptransfer-cli\src\main.rs:1548:                        Err(e) => { pipeline_error = 
+Some(anyhow::anyhow!("Task panic: {}", e)); break; }
+  desktop\p2ptransfer-cli\src\main.rs:1549:                    }
+  desktop\p2ptransfer-cli\src\main.rs:1550:                }
+  desktop\p2ptransfer-cli\src\main.rs:1551:                else => {
+  desktop\p2ptransfer-cli\src\main.rs:1552:                    if join_set.is_empty() {
+  desktop\p2ptransfer-cli\src\main.rs:1553:                        // Channel closed and join set empty
+> desktop\p2ptransfer-cli\src\main.rs:1554:                        break;
+  desktop\p2ptransfer-cli\src\main.rs:1555:                    }
+  desktop\p2ptransfer-cli\src\main.rs:1556:                }
+  desktop\p2ptransfer-cli\src\main.rs:1557:            }
+  desktop\p2ptransfer-cli\src\main.rs:1558:        }
+  desktop\p2ptransfer-cli\src\main.rs:1559:
+  desktop\p2ptransfer-cli\src\main.rs:1560:        if let Some(e) = pipeline_error {
+  desktop\p2ptransfer-cli\src\main.rs:1561:            shared_state.resume_manager.fail_transfer(&session_id)?;
+  desktop\p2ptransfer-cli\src\main.rs:1562:            anyhow::bail!("Receiver pipeline broken: {e:?}");
+  desktop\p2ptransfer-cli\src\main.rs:1563:        }
+  desktop\p2ptransfer-cli\src\main.rs:1564:
+  desktop\p2ptransfer-cli\src\main.rs:1565:        let mut f = file_mutex.lock().await;
+  desktop\p2ptransfer-cli\src\main.rs:1566:        f.flush().await?;
+  desktop\p2ptransfer-cli\src\main.rs:1567:        drop(f);
+  desktop\p2ptransfer-cli\src\main.rs:1568:        drop(chunk_rx);
+  desktop\p2ptransfer-cli\src\main.rs:1569:        reader_task.abort();
+  desktop\p2ptransfer-cli\src\main.rs:1570:        Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:1571:    }
+  desktop\p2ptransfer-cli\src\main.rs:1572:}
+  desktop\p2ptransfer-cli\src\main.rs:1573:
+  desktop\p2ptransfer-cli\src\main.rs:1574:async fn cmd_list(duration: u64, config: &P2pConfig) -> Result<()> {
+
+

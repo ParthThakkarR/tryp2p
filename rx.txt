@@ -1,0 +1,187 @@
+﻿
+  desktop\p2ptransfer-cli\src\main.rs:1497:
+  desktop\p2ptransfer-cli\src\main.rs:1498:                tokio::select! {
+> desktop\p2ptransfer-cli\src\main.rs:1499:                    Some(msg) = chunk_rx.recv(), if (received_count + 
+(join_set.len() as u64) < total_to_receive) => {
+  desktop\p2ptransfer-cli\src\main.rs:1500:                        match msg {
+  desktop\p2ptransfer-cli\src\main.rs:1501:                            Ok((tag, payload)) => {
+  desktop\p2ptransfer-cli\src\main.rs:1502:                                if tag == TAG_ERROR {
+  desktop\p2ptransfer-cli\src\main.rs:1503:                                    pipeline_error = 
+Some(anyhow::anyhow!("Peer sent error: {}", String::from_utf8_lossy(&payload)));
+  desktop\p2ptransfer-cli\src\main.rs:1504:                                    break;
+  desktop\p2ptransfer-cli\src\main.rs:1505:                                }
+  desktop\p2ptransfer-cli\src\main.rs:1506:                                if tag != TAG_CHUNK || payload.len() < 5 {
+  desktop\p2ptransfer-cli\src\main.rs:1507:                                    pipeline_error = 
+Some(anyhow::anyhow!("Expected CHUNK or malformed chunk"));
+  desktop\p2ptransfer-cli\src\main.rs:1508:                                    break;
+  desktop\p2ptransfer-cli\src\main.rs:1509:                                }
+  desktop\p2ptransfer-cli\src\main.rs:1510:                                
+  desktop\p2ptransfer-cli\src\main.rs:1511:                                let recv_index = 
+u32::from_le_bytes(payload[..4].try_into().unwrap()) as u64;
+  desktop\p2ptransfer-cli\src\main.rs:1512:                                let compressed = payload[4] != 0;
+  desktop\p2ptransfer-cli\src\main.rs:1513:                                let encrypted_payload = 
+payload[5..].to_vec();
+  desktop\p2ptransfer-cli\src\main.rs:1514:                                
+  desktop\p2ptransfer-cli\src\main.rs:1515:                                let enc_key = enc_key; // copy
+  desktop\p2ptransfer-cli\src\main.rs:1516:                                let nonce_prefix = nonce_prefix; // copy
+  desktop\p2ptransfer-cli\src\main.rs:1517:                                let chunk_size = metadata.chunk_size;
+  desktop\p2ptransfer-cli\src\main.rs:1518:                                let file_clone = file_mutex.clone();
+  desktop\p2ptransfer-cli\src\main.rs:1519:                                
+  desktop\p2ptransfer-cli\src\main.rs:1520:                                join_set.spawn(async move {
+  desktop\p2ptransfer-cli\src\main.rs:1521:                                    eprintln!("[{}] Receiver: Processing 
+chunk {}", chrono::Local::now().format("%H:%M:%S%.3f"), recv_index);
+  desktop\p2ptransfer-cli\src\main.rs:1522:                                    let chunk_data = 
+tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+  desktop\p2ptransfer-cli\src\main.rs:1523:                                        let nonce = 
+aead::build_nonce(&nonce_prefix, recv_index);
+  desktop\p2ptransfer-cli\src\main.rs:1524:                                        let decrypted = 
+aead::decrypt(&enc_key, &nonce, &encrypted_payload)
+  desktop\p2ptransfer-cli\src\main.rs:1525:                                            .context("Chunk decryption 
+failed")?;
+  desktop\p2ptransfer-cli\src\main.rs:1526:                                        if compressed {
+  desktop\p2ptransfer-cli\src\main.rs:1527:                                            
+Ok(p2ptransfer_core::compress::zstd::decompress(&decrypted)
+  desktop\p2ptransfer-cli\src\main.rs:1528:                                                .context("Failed to 
+decompress chunk")?)
+  desktop\p2ptransfer-cli\src\main.rs:1529:                                        } else {
+  desktop\p2ptransfer-cli\src\main.rs:1530:                                            Ok(decrypted)
+  desktop\p2ptransfer-cli\src\main.rs:1531:                                        }
+  desktop\p2ptransfer-cli\src\main.rs:1532:                                    }).await??;
+  desktop\p2ptransfer-cli\src\main.rs:1533:                                    
+  desktop\p2ptransfer-cli\src\main.rs:1534:                                    let offset = recv_index * chunk_size as 
+u64;
+  desktop\p2ptransfer-cli\src\main.rs:1535:                                    let mut f = file_clone.lock().await;
+  desktop\p2ptransfer-cli\src\main.rs:1536:                                    
+f.seek(std::io::SeekFrom::Start(offset)).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1537:                                    f.write_all(&chunk_data).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1538:                                    eprintln!("[{}] Receiver: Written chunk 
+{}", chrono::Local::now().format("%H:%M:%S%.3f"), recv_index);
+  desktop\p2ptransfer-cli\src\main.rs:1539:                                    
+  desktop\p2ptransfer-cli\src\main.rs:1540:                                    Ok::<_, anyhow::Error>((recv_index, 
+chunk_data.len()))
+  desktop\p2ptransfer-cli\src\main.rs:1541:                                });
+  desktop\p2ptransfer-cli\src\main.rs:1542:                            }
+  desktop\p2ptransfer-cli\src\main.rs:1543:                            Err(e) => {
+  desktop\p2ptransfer-cli\src\main.rs:1544:                                pipeline_error = Some(e);
+  desktop\p2ptransfer-cli\src\main.rs:1545:                                break;
+  desktop\p2ptransfer-cli\src\main.rs:1546:                            }
+  desktop\p2ptransfer-cli\src\main.rs:1547:                        }
+  desktop\p2ptransfer-cli\src\main.rs:1548:                    }
+  desktop\p2ptransfer-cli\src\main.rs:1549:                    
+  desktop\p2ptransfer-cli\src\main.rs:1550:                    Some(res) = join_set.join_next(), if 
+!join_set.is_empty() => {
+  desktop\p2ptransfer-cli\src\main.rs:1551:                        match res {
+  desktop\p2ptransfer-cli\src\main.rs:1552:                            Ok(Ok((recv_index, len))) => {
+  desktop\p2ptransfer-cli\src\main.rs:1553:                                received_count += 1;
+  desktop\p2ptransfer-cli\src\main.rs:1554:                                
+  desktop\p2ptransfer-cli\src\main.rs:1555:                                let mut ack = Vec::with_capacity(4);
+  desktop\p2ptransfer-cli\src\main.rs:1556:                                ack.extend_from_slice(&(recv_index as 
+u32).to_le_bytes());
+  desktop\p2ptransfer-cli\src\main.rs:1557:                                if let Err(e) = send_tagged(&mut wh, 
+TAG_CHUNK_ACK, &ack).await {
+  desktop\p2ptransfer-cli\src\main.rs:1558:                                    pipeline_error = Some(e);
+  desktop\p2ptransfer-cli\src\main.rs:1559:                                    break;
+  desktop\p2ptransfer-cli\src\main.rs:1560:                                }
+  desktop\p2ptransfer-cli\src\main.rs:1561:                                
+  desktop\p2ptransfer-cli\src\main.rs:1562:                                bytes_received += len as i64;
+  desktop\p2ptransfer-cli\src\main.rs:1563:                                let _ = 
+self.resume_manager.update_progress(&session_id, bytes_received);
+  desktop\p2ptransfer-cli\src\main.rs:1564:                            }
+  desktop\p2ptransfer-cli\src\main.rs:1565:                            Ok(Err(e)) => {
+  desktop\p2ptransfer-cli\src\main.rs:1566:                                pipeline_error = Some(e);
+  desktop\p2ptransfer-cli\src\main.rs:1567:                                break;
+  desktop\p2ptransfer-cli\src\main.rs:1568:                            }
+  desktop\p2ptransfer-cli\src\main.rs:1569:                            Err(e) => {
+  desktop\p2ptransfer-cli\src\main.rs:1570:                                pipeline_error = Some(anyhow::anyhow!("Task 
+panic: {}", e));
+  desktop\p2ptransfer-cli\src\main.rs:1571:                                break;
+  desktop\p2ptransfer-cli\src\main.rs:1572:                            }
+  desktop\p2ptransfer-cli\src\main.rs:1573:                        }
+  desktop\p2ptransfer-cli\src\main.rs:1574:                    }
+  desktop\p2ptransfer-cli\src\main.rs:1575:                }
+  desktop\p2ptransfer-cli\src\main.rs:1576:            }
+  desktop\p2ptransfer-cli\src\main.rs:1577:
+  desktop\p2ptransfer-cli\src\main.rs:1578:            if let Some(e) = pipeline_error {
+  desktop\p2ptransfer-cli\src\main.rs:1579:                self.resume_manager.fail_transfer(&session_id)?;
+  desktop\p2ptransfer-cli\src\main.rs:1580:                anyhow::bail!("Receiver pipeline broken: {e:?}");
+  desktop\p2ptransfer-cli\src\main.rs:1581:            }
+  desktop\p2ptransfer-cli\src\main.rs:1582:
+  desktop\p2ptransfer-cli\src\main.rs:1583:            let mut f = file_mutex.lock().await;
+  desktop\p2ptransfer-cli\src\main.rs:1584:            f.flush().await?;
+  desktop\p2ptransfer-cli\src\main.rs:1585:            drop(f);
+  desktop\p2ptransfer-cli\src\main.rs:1586:
+  desktop\p2ptransfer-cli\src\main.rs:1587:            drop(chunk_rx);
+  desktop\p2ptransfer-cli\src\main.rs:1588:            reader_task.abort();
+  desktop\p2ptransfer-cli\src\main.rs:1589:
+  desktop\p2ptransfer-cli\src\main.rs:1590:        // --- Step 3: Verify and complete ---
+  desktop\p2ptransfer-cli\src\main.rs:1591:        eprintln!("[{}] Receiver: Calling verify_checksum...", 
+chrono::Local::now().format("%H:%M:%S%.3f"));
+  desktop\p2ptransfer-cli\src\main.rs:1592:        let hash_match = engine
+  desktop\p2ptransfer-cli\src\main.rs:1593:            .verify_checksum(&output_path, &metadata.checksum)
+  desktop\p2ptransfer-cli\src\main.rs:1594:            .await?;
+  desktop\p2ptransfer-cli\src\main.rs:1595:        eprintln!("[{}] Receiver: verify_checksum returned {}", 
+chrono::Local::now().format("%H:%M:%S%.3f"), hash_match);
+  desktop\p2ptransfer-cli\src\main.rs:1596:
+  desktop\p2ptransfer-cli\src\main.rs:1597:        if hash_match {
+  desktop\p2ptransfer-cli\src\main.rs:1598:            eprintln!("[{}] Receiver: Sending TAG_COMPLETE...", 
+chrono::Local::now().format("%H:%M:%S%.3f"));
+  desktop\p2ptransfer-cli\src\main.rs:1599:            send_tagged(&mut wh, TAG_COMPLETE, &metadata.checksum).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1600:            eprintln!("[{}] Receiver: Updating resume manager...", 
+chrono::Local::now().format("%H:%M:%S%.3f"));
+  desktop\p2ptransfer-cli\src\main.rs:1601:            self.resume_manager
+  desktop\p2ptransfer-cli\src\main.rs:1602:                .complete_transfer(&session_id, 
+&format_hex(&metadata.checksum))?;
+  desktop\p2ptransfer-cli\src\main.rs:1603:            eprintln!("[{}] Receiver: Transfer complete!", 
+chrono::Local::now().format("%H:%M:%S%.3f"));
+  desktop\p2ptransfer-cli\src\main.rs:1604:            info!("Transfer {session_id} completed: {}", 
+metadata.file_name);
+  desktop\p2ptransfer-cli\src\main.rs:1605:        } else {
+  desktop\p2ptransfer-cli\src\main.rs:1606:            let err_msg = b"Checksum mismatch";
+  desktop\p2ptransfer-cli\src\main.rs:1607:            send_tagged(&mut wh, TAG_ERROR, err_msg).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1608:            self.resume_manager.fail_transfer(&session_id)?;
+  desktop\p2ptransfer-cli\src\main.rs:1609:            anyhow::bail!("Checksum mismatch for {session_id}");
+  desktop\p2ptransfer-cli\src\main.rs:1610:        }
+  desktop\p2ptransfer-cli\src\main.rs:1611:
+  desktop\p2ptransfer-cli\src\main.rs:1612:        Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:1613:    }
+  desktop\p2ptransfer-cli\src\main.rs:1614:}
+  desktop\p2ptransfer-cli\src\main.rs:1615:
+  desktop\p2ptransfer-cli\src\main.rs:1616:async fn cmd_list(duration: u64, config: &P2pConfig) -> Result<()> {
+  desktop\p2ptransfer-cli\src\main.rs:1617:    let hostname = hostname::get()
+  desktop\p2ptransfer-cli\src\main.rs:1618:        .unwrap_or_default()
+  desktop\p2ptransfer-cli\src\main.rs:1619:        .to_string_lossy()
+  desktop\p2ptransfer-cli\src\main.rs:1620:        .to_string();
+  desktop\p2ptransfer-cli\src\main.rs:1621:
+  desktop\p2ptransfer-cli\src\main.rs:1622:    let mut discovery =
+  desktop\p2ptransfer-cli\src\main.rs:1623:        DiscoveryService::new(hostname, DEFAULT_TCP_PORT, 
+config.discovery_port).await?;
+  desktop\p2ptransfer-cli\src\main.rs:1624:    discovery.start().await?;
+  desktop\p2ptransfer-cli\src\main.rs:1625:
+  desktop\p2ptransfer-cli\src\main.rs:1626:    println!("Discovering peers for {duration}s...");
+  desktop\p2ptransfer-cli\src\main.rs:1627:    tokio::time::sleep(Duration::from_secs(duration)).await;
+  desktop\p2ptransfer-cli\src\main.rs:1628:
+  desktop\p2ptransfer-cli\src\main.rs:1629:    let peers = discovery.get_peers().await;
+  desktop\p2ptransfer-cli\src\main.rs:1630:    discovery.stop().await;
+  desktop\p2ptransfer-cli\src\main.rs:1631:
+  desktop\p2ptransfer-cli\src\main.rs:1632:    if peers.is_empty() {
+  desktop\p2ptransfer-cli\src\main.rs:1633:        println!("No peers discovered on local network.");
+  desktop\p2ptransfer-cli\src\main.rs:1634:        return Ok(());
+  desktop\p2ptransfer-cli\src\main.rs:1635:    }
+  desktop\p2ptransfer-cli\src\main.rs:1636:
+  desktop\p2ptransfer-cli\src\main.rs:1637:    let resume_manager_opt = 
+TransferResumeManager::new(config.data_dir.join("resume")).ok();
+  desktop\p2ptransfer-cli\src\main.rs:1638:    let contacts = resume_manager_opt.and_then(|rm| 
+rm.list_contacts().ok()).unwrap_or_default();
+  desktop\p2ptransfer-cli\src\main.rs:1639:
+  desktop\p2ptransfer-cli\src\main.rs:1640:    println!("Found {} peer(s):", peers.len());
+  desktop\p2ptransfer-cli\src\main.rs:1641:    for peer in &peers {
+  desktop\p2ptransfer-cli\src\main.rs:1642:        let now = std::time::SystemTime::now()
+  desktop\p2ptransfer-cli\src\main.rs:1643:            .duration_since(std::time::UNIX_EPOCH)
+  desktop\p2ptransfer-cli\src\main.rs:1644:            .unwrap_or_default()
+  desktop\p2ptransfer-cli\src\main.rs:1645:            .as_secs();
+  desktop\p2ptransfer-cli\src\main.rs:1646:        
+  desktop\p2ptransfer-cli\src\main.rs:1647:        // Find if this peer's IP matches a known contact
+  desktop\p2ptransfer-cli\src\main.rs:1648:        let peer_ip = peer.socket_addr.ip().to_string();
+  desktop\p2ptransfer-cli\src\main.rs:1649:        let known_name = contacts.iter()
+
+

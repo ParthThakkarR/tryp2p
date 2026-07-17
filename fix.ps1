@@ -1,0 +1,5 @@
+$bytes = [System.IO.File]::ReadAllBytes('desktop/p2ptransfer-cli/src/main.rs')
+$str = [System.Text.Encoding]::GetEncoding('iso-8859-1').GetString($bytes)
+$str = $str.Replace([char]151, '-')
+$newBytes = [System.Text.Encoding]::UTF8.GetBytes($str)
+[System.IO.File]::WriteAllBytes('desktop/p2ptransfer-cli/src/main.rs', $newBytes)

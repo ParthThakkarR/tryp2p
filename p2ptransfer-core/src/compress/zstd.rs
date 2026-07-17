@@ -1,15 +1,26 @@
 use anyhow::{Context, Result};
 use std::io::Read;
 
-pub const DEFAULT_LEVEL: i32 = 10;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+pub const DEFAULT_LEVEL: i32 = 3;
 pub const MAX_LEVEL: i32 = 22;
 pub const FAST_LEVEL: i32 = 3;
 
+thread_local! {
+    static COMPRESSORS: RefCell<HashMap<i32, zstd::bulk::Compressor<'static>>> = RefCell::new(HashMap::new());
+}
+
 pub fn compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
     let level = level.clamp(1, MAX_LEVEL);
-    let compressed = zstd::stream::encode_all(std::io::Cursor::new(data), level)
-        .context("Zstd compression failed")?;
-    Ok(compressed)
+    COMPRESSORS.with(|comps| {
+        let mut comps = comps.borrow_mut();
+        let compressor = comps.entry(level).or_insert_with(|| {
+            zstd::bulk::Compressor::new(level).expect("Failed to create zstd compressor")
+        });
+        compressor.compress(data).context("Zstd compression failed")
+    })
 }
 
 pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {

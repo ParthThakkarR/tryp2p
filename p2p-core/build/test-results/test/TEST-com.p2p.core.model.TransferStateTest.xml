@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="TransferState Tests" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-07-02T05:41:41.966Z" hostname="PARTH" time="0.003">
-  <properties/>
-  <testcase name="resumable states identified correctly" classname="com.p2p.core.model.TransferStateTest" time="0.0"/>
-  <testcase name="active states identified correctly" classname="com.p2p.core.model.TransferStateTest" time="0.0"/>
-  <testcase name="terminal states identified correctly" classname="com.p2p.core.model.TransferStateTest" time="0.0"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

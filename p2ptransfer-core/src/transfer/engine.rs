@@ -169,16 +169,29 @@ impl TransferEngine {
     }
 
     pub async fn verify_checksum(&self, path: &Path, expected: &[u8; 32]) -> Result<bool> {
-        let owned_path = path.to_path_buf();
+        let path = path.to_owned();
         let expected = *expected;
-        let actual = tokio::task::spawn_blocking(move || {
-            let file = std::fs::File::open(&owned_path)
-                .context("Failed to open file for checksum verification")?;
-            hasher::blake3_hash_reader(file)
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            eprintln!("verify_checksum: Starting for {:?}", path);
+            let mut hasher = blake3::Hasher::new();
+            let mut file = std::fs::File::open(&path)?;
+            eprintln!("verify_checksum: Opened file {:?}", path);
+            let mut buf = [0u8; 65536];
+            let mut total_read = 0;
+            loop {
+                let n = std::io::Read::read(&mut file, &mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                total_read += n;
+            }
+            eprintln!("verify_checksum: Read {} bytes, finalizing...", total_read);
+            let res = hasher.finalize().as_bytes() == &expected;
+            eprintln!("verify_checksum: Result = {}", res);
+            Ok(res)
         })
-        .await
-        .context("Failed to compute checksum for verification")??;
-        Ok(actual == expected)
+        .await?
     }
 
     pub async fn track_progress(

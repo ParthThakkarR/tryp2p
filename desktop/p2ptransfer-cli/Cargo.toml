@@ -25,3 +25,10 @@ serde_json.workspace = true
 local-ip-address = "0.6"
 chrono = "0.4.45"
 blake3.workspace = true
+reqwest = { version = "0.13.4", features = ["json", "stream"] }
+rand.workspace = true
+hex = "0.4.3"
+tempfile = "3.10"
+# iroh re-exported through p2ptransfer-core's iroh-transport feature
+iroh = "1.0.2"
+iroh-blobs = "0.103.0"

@@ -1,0 +1,330 @@
+﻿
+  desktop\p2ptransfer-cli\src\main.rs:319:            compression,
+  desktop\p2ptransfer-cli\src\main.rs:320:            chunk_size,
+  desktop\p2ptransfer-cli\src\main.rs:321:            connections,
+> desktop\p2ptransfer-cli\src\main.rs:322:        } => cmd_send(path, peer, wan, compression, chunk_size, 
+connections.unwrap_or(config.connections), &config).await,
+  desktop\p2ptransfer-cli\src\main.rs:323:        Commands::Receive { link, output, concurrency } => {
+  desktop\p2ptransfer-cli\src\main.rs:324:            cmd_receive_link(link, output, concurrency, &config).await
+  desktop\p2ptransfer-cli\src\main.rs:325:        },
+  desktop\p2ptransfer-cli\src\main.rs:326:        Commands::Listen {
+  desktop\p2ptransfer-cli\src\main.rs:327:            port,
+  desktop\p2ptransfer-cli\src\main.rs:328:            output,
+  desktop\p2ptransfer-cli\src\main.rs:329:            install_autostart,
+  desktop\p2ptransfer-cli\src\main.rs:330:        } => cmd_listen(port, output, install_autostart, &config).await,
+  desktop\p2ptransfer-cli\src\main.rs:331:        Commands::List { duration } => cmd_list(duration, &config).await,
+  desktop\p2ptransfer-cli\src\main.rs:332:        Commands::Resume { transfer_id } => cmd_resume(transfer_id, 
+&config).await,
+  desktop\p2ptransfer-cli\src\main.rs:333:        Commands::History => {
+  desktop\p2ptransfer-cli\src\main.rs:334:            cmd_history(&config).await?;
+  desktop\p2ptransfer-cli\src\main.rs:335:            Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:336:        }
+  desktop\p2ptransfer-cli\src\main.rs:337:        Commands::SendIroh { path } => {
+  desktop\p2ptransfer-cli\src\main.rs:338:            iroh_transport::iroh_send_file(Path::new(&path), 
+&config.data_dir).await
+  desktop\p2ptransfer-cli\src\main.rs:339:        }
+  desktop\p2ptransfer-cli\src\main.rs:340:        Commands::ListenIroh { ticket, output } => {
+  desktop\p2ptransfer-cli\src\main.rs:341:            iroh_transport::iroh_listen(&ticket, Path::new(&output), 
+&config.data_dir).await.map(|_| ())
+  desktop\p2ptransfer-cli\src\main.rs:342:        }
+  desktop\p2ptransfer-cli\src\main.rs:343:        Commands::Contacts { action } => cmd_contacts(action, &config).await,
+  desktop\p2ptransfer-cli\src\main.rs:344:        Commands::Status => cmd_status(&config).await,
+  desktop\p2ptransfer-cli\src\main.rs:345:        Commands::SlowReceive {
+  desktop\p2ptransfer-cli\src\main.rs:346:            output,
+  desktop\p2ptransfer-cli\src\main.rs:347:            chunk_delay_ms,
+  desktop\p2ptransfer-cli\src\main.rs:348:        } => cmd_slow_receive(output, chunk_delay_ms, &config).await,
+  desktop\p2ptransfer-cli\src\main.rs:349:        Commands::Config { show, set, reset } => {
+  desktop\p2ptransfer-cli\src\main.rs:350:            if reset {
+  desktop\p2ptransfer-cli\src\main.rs:351:                let default = P2pConfig::default();
+  desktop\p2ptransfer-cli\src\main.rs:352:                default.save(&config_path)?;
+  desktop\p2ptransfer-cli\src\main.rs:353:                println!("Config reset to defaults at {}", 
+config_path.display());
+  desktop\p2ptransfer-cli\src\main.rs:354:                Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:355:            } else if let Some(kv) = set {
+  desktop\p2ptransfer-cli\src\main.rs:356:                let mut config = if config_path.exists() {
+  desktop\p2ptransfer-cli\src\main.rs:357:                    P2pConfig::load(&config_path)?
+  desktop\p2ptransfer-cli\src\main.rs:358:                } else {
+  desktop\p2ptransfer-cli\src\main.rs:359:                    P2pConfig::default()
+  desktop\p2ptransfer-cli\src\main.rs:360:                };
+  desktop\p2ptransfer-cli\src\main.rs:361:                apply_config_setting(&mut config, &kv)?;
+  desktop\p2ptransfer-cli\src\main.rs:362:                config.save(&config_path)?;
+  desktop\p2ptransfer-cli\src\main.rs:363:                println!("Set config: {kv}");
+  desktop\p2ptransfer-cli\src\main.rs:364:                Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:365:            } else if show {
+  desktop\p2ptransfer-cli\src\main.rs:366:                cmd_config_show(&config, &config_path)
+  desktop\p2ptransfer-cli\src\main.rs:367:            } else {
+  desktop\p2ptransfer-cli\src\main.rs:368:                println!("Config path: {}", config_path.display());
+  desktop\p2ptransfer-cli\src\main.rs:369:                println!("Use --show to display, --set KEY=VALUE to modify, 
+--reset for defaults.");
+  desktop\p2ptransfer-cli\src\main.rs:370:                Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:371:            }
+  desktop\p2ptransfer-cli\src\main.rs:372:        }
+  desktop\p2ptransfer-cli\src\main.rs:373:    }
+  desktop\p2ptransfer-cli\src\main.rs:374:}
+  desktop\p2ptransfer-cli\src\main.rs:375:
+  desktop\p2ptransfer-cli\src\main.rs:376:fn get_default_config_path() -> PathBuf {
+  desktop\p2ptransfer-cli\src\main.rs:377:    dirs::config_dir()
+  desktop\p2ptransfer-cli\src\main.rs:378:        .unwrap_or_else(|| PathBuf::from("."))
+  desktop\p2ptransfer-cli\src\main.rs:379:        .join("p2p")
+  desktop\p2ptransfer-cli\src\main.rs:380:        .join("config.toml")
+  desktop\p2ptransfer-cli\src\main.rs:381:}
+  desktop\p2ptransfer-cli\src\main.rs:382:
+  desktop\p2ptransfer-cli\src\main.rs:383:fn format_hex(bytes: &[u8; 32]) -> String {
+  desktop\p2ptransfer-cli\src\main.rs:384:    let mut s = String::with_capacity(64);
+  desktop\p2ptransfer-cli\src\main.rs:385:    for b in bytes {
+  desktop\p2ptransfer-cli\src\main.rs:386:        s.push_str(&format!("{b:02x}"));
+  desktop\p2ptransfer-cli\src\main.rs:387:    }
+  desktop\p2ptransfer-cli\src\main.rs:388:    s
+  desktop\p2ptransfer-cli\src\main.rs:389:}
+  desktop\p2ptransfer-cli\src\main.rs:390:
+  desktop\p2ptransfer-cli\src\main.rs:391:// Wire protocol tags (1 byte, first byte of every frame payload)
+  desktop\p2ptransfer-cli\src\main.rs:392:const TAG_METADATA: u8 = 0x00;
+  desktop\p2ptransfer-cli\src\main.rs:393:const TAG_CHUNK: u8 = 0x01;
+  desktop\p2ptransfer-cli\src\main.rs:394:const TAG_CHUNK_ACK: u8 = 0x02;
+  desktop\p2ptransfer-cli\src\main.rs:395:const TAG_COMPLETE: u8 = 0x03;
+  desktop\p2ptransfer-cli\src\main.rs:396:const TAG_ERROR: u8 = 0x04;
+  desktop\p2ptransfer-cli\src\main.rs:397:const TAG_CLIENT_HELLO: u8 = 0x05;
+  desktop\p2ptransfer-cli\src\main.rs:398:const TAG_SERVER_HELLO: u8 = 0x06;
+  desktop\p2ptransfer-cli\src\main.rs:399:const TAG_SESSION_JOIN: u8 = 0x07;
+  desktop\p2ptransfer-cli\src\main.rs:400:
+  desktop\p2ptransfer-cli\src\main.rs:401:async fn send_tagged<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W, tag: 
+u8, payload: &[u8]) -> Result<()> {
+  desktop\p2ptransfer-cli\src\main.rs:402:    let mut framed = Vec::with_capacity(1 + payload.len());
+  desktop\p2ptransfer-cli\src\main.rs:403:    framed.push(tag);
+  desktop\p2ptransfer-cli\src\main.rs:404:    framed.extend_from_slice(payload);
+  desktop\p2ptransfer-cli\src\main.rs:405:    tcp::send_message(stream, &framed).await
+  desktop\p2ptransfer-cli\src\main.rs:406:}
+  desktop\p2ptransfer-cli\src\main.rs:407:
+  desktop\p2ptransfer-cli\src\main.rs:408:async fn receive_tagged<R: tokio::io::AsyncRead + Unpin>(stream: &mut R) -> 
+Result<(u8, Vec<u8>)> {
+  desktop\p2ptransfer-cli\src\main.rs:409:    let data = tcp::receive_message(stream).await?;
+  desktop\p2ptransfer-cli\src\main.rs:410:    if data.is_empty() {
+  desktop\p2ptransfer-cli\src\main.rs:411:        anyhow::bail!("Empty message");
+  desktop\p2ptransfer-cli\src\main.rs:412:    }
+  desktop\p2ptransfer-cli\src\main.rs:413:    let tag = data[0];
+  desktop\p2ptransfer-cli\src\main.rs:414:    Ok((tag, data[1..].to_vec()))
+  desktop\p2ptransfer-cli\src\main.rs:415:}
+  desktop\p2ptransfer-cli\src\main.rs:416:
+  desktop\p2ptransfer-cli\src\main.rs:417:#[allow(clippy::too_many_arguments)]
+  desktop\p2ptransfer-cli\src\main.rs:418:async fn send_chunk_with_ack(
+  desktop\p2ptransfer-cli\src\main.rs:419:    stream: &mut TcpStream,
+  desktop\p2ptransfer-cli\src\main.rs:420:    engine: &TransferEngine,
+  desktop\p2ptransfer-cli\src\main.rs:421:    path: &Path,
+  desktop\p2ptransfer-cli\src\main.rs:422:    metadata: &TransferMetadata,
+  desktop\p2ptransfer-cli\src\main.rs:539:    );
+  desktop\p2ptransfer-cli\src\main.rs:540:}
+  desktop\p2ptransfer-cli\src\main.rs:541:
+> desktop\p2ptransfer-cli\src\main.rs:542:async fn cmd_send_wan(path: PathBuf, config: &P2pConfig) -> Result<()> {
+  desktop\p2ptransfer-cli\src\main.rs:543:    println!("Initializing WAN sharing...");
+  desktop\p2ptransfer-cli\src\main.rs:544:    let dest_dir = config.data_dir.join("bin");
+  desktop\p2ptransfer-cli\src\main.rs:545:    
+  desktop\p2ptransfer-cli\src\main.rs:546:    let cp_pin = 
+p2ptransfer_core::network::wan_constants::get_copyparty_pin();
+  desktop\p2ptransfer-cli\src\main.rs:547:    let cf_pin = 
+p2ptransfer_core::network::wan_constants::get_cloudflared_pin();
+  desktop\p2ptransfer-cli\src\main.rs:548:    
+  desktop\p2ptransfer-cli\src\main.rs:549:    println!("Ensuring copyparty is available...");
+  desktop\p2ptransfer-cli\src\main.rs:550:    let copyparty_bin = 
+p2ptransfer_core::network::wan::downloader::ensure_binary(cp_pin, &dest_dir).await?;
+  desktop\p2ptransfer-cli\src\main.rs:551:    println!("Ensuring cloudflared is available...");
+  desktop\p2ptransfer-cli\src\main.rs:552:    let cloudflared_bin = 
+p2ptransfer_core::network::wan::downloader::ensure_binary(cf_pin, &dest_dir).await?;
+  desktop\p2ptransfer-cli\src\main.rs:553:    
+  desktop\p2ptransfer-cli\src\main.rs:554:    // Hash the file
+  desktop\p2ptransfer-cli\src\main.rs:555:    println!("Hashing {}...", path.display());
+  desktop\p2ptransfer-cli\src\main.rs:556:    let mut file = std::fs::File::open(&path)?;
+  desktop\p2ptransfer-cli\src\main.rs:557:    let size = file.metadata()?.len();
+  desktop\p2ptransfer-cli\src\main.rs:558:    let hash = p2ptransfer_core::transfer::hasher::blake3_hash_reader(&mut 
+file)?;
+  desktop\p2ptransfer-cli\src\main.rs:559:    let hash_hex = hex::encode(hash);
+  desktop\p2ptransfer-cli\src\main.rs:560:    
+  desktop\p2ptransfer-cli\src\main.rs:561:    // Create random token and staging dir
+  desktop\p2ptransfer-cli\src\main.rs:562:    use rand::RngCore;
+  desktop\p2ptransfer-cli\src\main.rs:563:    let mut rng_data = [0u8; 32];
+  desktop\p2ptransfer-cli\src\main.rs:564:    rand::thread_rng().fill_bytes(&mut rng_data);
+  desktop\p2ptransfer-cli\src\main.rs:565:    let token = hex::encode(&rng_data[..8]);
+  desktop\p2ptransfer-cli\src\main.rs:566:    
+  desktop\p2ptransfer-cli\src\main.rs:567:    let staging_root = config.data_dir.join("staging");
+  desktop\p2ptransfer-cli\src\main.rs:568:    std::fs::create_dir_all(&staging_root)?;
+  desktop\p2ptransfer-cli\src\main.rs:569:    let staging_dir = staging_root.join(&token);
+  desktop\p2ptransfer-cli\src\main.rs:570:    std::fs::create_dir_all(&staging_dir)?;
+  desktop\p2ptransfer-cli\src\main.rs:571:    
+  desktop\p2ptransfer-cli\src\main.rs:572:    // Write manifest
+  desktop\p2ptransfer-cli\src\main.rs:573:    let manifest_path = staging_dir.join("manifest.json");
+  desktop\p2ptransfer-cli\src\main.rs:574:    let manifest = serde_json::json!({
+  desktop\p2ptransfer-cli\src\main.rs:575:        "filename": path.file_name().unwrap_or_default().to_string_lossy(),
+  desktop\p2ptransfer-cli\src\main.rs:576:        "size": size,
+  desktop\p2ptransfer-cli\src\main.rs:577:        "blake3": hash_hex
+  desktop\p2ptransfer-cli\src\main.rs:578:    });
+  desktop\p2ptransfer-cli\src\main.rs:579:    std::fs::write(&manifest_path, 
+serde_json::to_string_pretty(&manifest)?)?;
+  desktop\p2ptransfer-cli\src\main.rs:580:    
+  desktop\p2ptransfer-cli\src\main.rs:581:    // Hardlink the actual file into the staging dir to avoid copying
+  desktop\p2ptransfer-cli\src\main.rs:582:    let staged_file_path = staging_dir.join(path.file_name().unwrap());
+  desktop\p2ptransfer-cli\src\main.rs:583:    if std::fs::hard_link(&path, &staged_file_path).is_err() {
+  desktop\p2ptransfer-cli\src\main.rs:584:        // Fallback to copy if hardlink fails (e.g. cross-device)
+  desktop\p2ptransfer-cli\src\main.rs:585:        std::fs::copy(&path, &staged_file_path)?;
+  desktop\p2ptransfer-cli\src\main.rs:586:    }
+  desktop\p2ptransfer-cli\src\main.rs:587:    
+  desktop\p2ptransfer-cli\src\main.rs:588:    println!("Starting WAN tunnel...");
+  desktop\p2ptransfer-cli\src\main.rs:589:    // Serve the staging_root so the URL paths are `<token>/manifest.json` 
+and `<token>/<file>`
+  desktop\p2ptransfer-cli\src\main.rs:590:    let mut tunnel = 
+p2ptransfer_core::network::wan::runner::WanTunnel::start(
+  desktop\p2ptransfer-cli\src\main.rs:591:        &copyparty_bin, 
+  desktop\p2ptransfer-cli\src\main.rs:592:        &cloudflared_bin, 
+  desktop\p2ptransfer-cli\src\main.rs:593:        &staging_root, 
+  desktop\p2ptransfer-cli\src\main.rs:594:        token.clone(),
+  desktop\p2ptransfer-cli\src\main.rs:595:        config.tunnel_token.clone(),
+  desktop\p2ptransfer-cli\src\main.rs:596:    ).await?;
+  desktop\p2ptransfer-cli\src\main.rs:597:    
+  desktop\p2ptransfer-cli\src\main.rs:598:    println!();
+  desktop\p2ptransfer-cli\src\main.rs:599:    println!("============================================================");
+  desktop\p2ptransfer-cli\src\main.rs:600:    println!("  ✅ Ready to share!");
+  desktop\p2ptransfer-cli\src\main.rs:601:    println!("  Your secure WAN link is:");
+  desktop\p2ptransfer-cli\src\main.rs:602:    println!("  {}/{}", tunnel.url, token);
+  desktop\p2ptransfer-cli\src\main.rs:603:    println!("============================================================");
+  desktop\p2ptransfer-cli\src\main.rs:604:    println!("Press Enter to stop sharing and close the tunnel...");
+  desktop\p2ptransfer-cli\src\main.rs:605:    
+  desktop\p2ptransfer-cli\src\main.rs:606:    use std::io::Write;
+  desktop\p2ptransfer-cli\src\main.rs:607:    let _ = std::io::stdout().flush();
+  desktop\p2ptransfer-cli\src\main.rs:608:    
+  desktop\p2ptransfer-cli\src\main.rs:609:    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
+  desktop\p2ptransfer-cli\src\main.rs:610:    let mut buf = String::new();
+  desktop\p2ptransfer-cli\src\main.rs:611:    use tokio::io::AsyncBufReadExt;
+  desktop\p2ptransfer-cli\src\main.rs:612:    let n = stdin.read_line(&mut buf).await.unwrap_or(0);
+  desktop\p2ptransfer-cli\src\main.rs:613:    if n == 0 {
+  desktop\p2ptransfer-cli\src\main.rs:614:        // EOF means no terminal attached (background job). Sleep forever to 
+keep tunnel alive.
+  desktop\p2ptransfer-cli\src\main.rs:615:        loop { 
+tokio::time::sleep(std::time::Duration::from_secs(3600)).await; }
+  desktop\p2ptransfer-cli\src\main.rs:616:    }
+  desktop\p2ptransfer-cli\src\main.rs:617:    
+  desktop\p2ptransfer-cli\src\main.rs:618:    println!("Stopping tunnel...");
+  desktop\p2ptransfer-cli\src\main.rs:619:    tunnel.stop().await;
+  desktop\p2ptransfer-cli\src\main.rs:620:    let _ = std::fs::remove_dir_all(&staging_dir);
+  desktop\p2ptransfer-cli\src\main.rs:621:    
+  desktop\p2ptransfer-cli\src\main.rs:622:    Ok(())
+  desktop\p2ptransfer-cli\src\main.rs:623:}
+  desktop\p2ptransfer-cli\src\main.rs:624:
+> desktop\p2ptransfer-cli\src\main.rs:625:async fn cmd_send(
+  desktop\p2ptransfer-cli\src\main.rs:626:    path: PathBuf,
+  desktop\p2ptransfer-cli\src\main.rs:627:    peer: Option<String>,
+  desktop\p2ptransfer-cli\src\main.rs:628:    wan: bool,
+  desktop\p2ptransfer-cli\src\main.rs:629:    compression: i32,
+  desktop\p2ptransfer-cli\src\main.rs:630:    chunk_size: usize,
+  desktop\p2ptransfer-cli\src\main.rs:631:    connections: usize,
+  desktop\p2ptransfer-cli\src\main.rs:632:    config: &P2pConfig,
+  desktop\p2ptransfer-cli\src\main.rs:633:) -> Result<()> {
+  desktop\p2ptransfer-cli\src\main.rs:634:    if wan || peer.is_none() {
+> desktop\p2ptransfer-cli\src\main.rs:635:        return cmd_send_wan(path, config).await;
+  desktop\p2ptransfer-cli\src\main.rs:636:    }
+  desktop\p2ptransfer-cli\src\main.rs:637:    let peer = peer.unwrap();
+  desktop\p2ptransfer-cli\src\main.rs:638:    if !path.exists() {
+  desktop\p2ptransfer-cli\src\main.rs:639:        anyhow::bail!("Path does not exist: {}", path.display());
+  desktop\p2ptransfer-cli\src\main.rs:640:    }
+  desktop\p2ptransfer-cli\src\main.rs:641:
+  desktop\p2ptransfer-cli\src\main.rs:642:    let mut resolved_peer = peer.clone();
+  desktop\p2ptransfer-cli\src\main.rs:643:    
+  desktop\p2ptransfer-cli\src\main.rs:644:    // Attempt to resolve contact from DB first
+  desktop\p2ptransfer-cli\src\main.rs:645:    if let Ok(resume_manager) = 
+TransferResumeManager::new(config.data_dir.join("resume")) {
+  desktop\p2ptransfer-cli\src\main.rs:646:        if let Ok(Some(contact)) = resume_manager.get_contact(&peer) {
+  desktop\p2ptransfer-cli\src\main.rs:647:            let addr_str = format!("{}:{}", contact.last_known_ip, 
+contact.last_known_port);
+  desktop\p2ptransfer-cli\src\main.rs:648:            println!("Resolved contact '{}' to {}", peer, addr_str);
+  desktop\p2ptransfer-cli\src\main.rs:649:            resolved_peer = addr_str;
+  desktop\p2ptransfer-cli\src\main.rs:650:        }
+  desktop\p2ptransfer-cli\src\main.rs:651:    }
+  desktop\p2ptransfer-cli\src\main.rs:652:
+  desktop\p2ptransfer-cli\src\main.rs:653:    let peer_addr: SocketAddr = match resolved_peer.parse() {
+  desktop\p2ptransfer-cli\src\main.rs:654:        Ok(addr) => addr,
+  desktop\p2ptransfer-cli\src\main.rs:655:        Err(_) => {
+  desktop\p2ptransfer-cli\src\main.rs:656:            anyhow::bail!(
+  desktop\p2ptransfer-cli\src\main.rs:657:                "Cannot resolve '{peer}'.\n\n\
+  desktop\p2ptransfer-cli\src\main.rs:658:                 '{peer}' is not a valid IP:port and was not found in local 
+contacts.\n\
+  desktop\p2ptransfer-cli\src\main.rs:659:                 Options:\n\
+  desktop\p2ptransfer-cli\src\main.rs:660:                 1. Use IP:port format:  p2p send {path} 1.2.3.4:9877\n\
+  desktop\p2ptransfer-cli\src\main.rs:661:                 2. Save a contact:      p2p contacts add {peer} 
+<ip:port>\n\n\
+  desktop\p2ptransfer-cli\src\main.rs:662:                 (WAN/link-based sharing will be added in a future phase)",
+  desktop\p2ptransfer-cli\src\main.rs:663:                path = path.display()
+  desktop\p2ptransfer-cli\src\main.rs:664:            );
+  desktop\p2ptransfer-cli\src\main.rs:665:        }
+  desktop\p2ptransfer-cli\src\main.rs:666:    };
+  desktop\p2ptransfer-cli\src\main.rs:667:
+  desktop\p2ptransfer-cli\src\main.rs:668:    let mut stream = match try_connect_fallback(peer_addr).await {
+  desktop\p2ptransfer-cli\src\main.rs:669:        Ok(s) => s,
+  desktop\p2ptransfer-cli\src\main.rs:670:        Err(e) => anyhow::bail!("{e}"),
+  desktop\p2ptransfer-cli\src\main.rs:671:    };
+  desktop\p2ptransfer-cli\src\main.rs:672:    set_nodelay(&stream);
+  desktop\p2ptransfer-cli\src\main.rs:673:
+  desktop\p2ptransfer-cli\src\main.rs:674:    // --- ECDH Handshake ---
+  desktop\p2ptransfer-cli\src\main.rs:675:    println!("Performing ECDH key exchange...");
+  desktop\p2ptransfer-cli\src\main.rs:676:    let kx = EcdhKeyExchange::new();
+  desktop\p2ptransfer-cli\src\main.rs:677:    let client_pub = kx.public_key_bytes();
+  desktop\p2ptransfer-cli\src\main.rs:678:    send_tagged(&mut stream, TAG_CLIENT_HELLO, &client_pub).await?;
+  desktop\p2ptransfer-cli\src\main.rs:679:    let (hello_tag, server_pub_raw) = receive_tagged(&mut stream).await?;
+  desktop\p2ptransfer-cli\src\main.rs:680:    if hello_tag != TAG_SERVER_HELLO {
+  desktop\p2ptransfer-cli\src\main.rs:681:        anyhow::bail!("Expected SERVER_HELLO during handshake, got 
+tag={hello_tag}");
+  desktop\p2ptransfer-cli\src\main.rs:682:    }
+  desktop\p2ptransfer-cli\src\main.rs:683:    let server_pub_bytes: [u8; 32] = server_pub_raw
+  desktop\p2ptransfer-cli\src\main.rs:684:        .as_slice()
+  desktop\p2ptransfer-cli\src\main.rs:685:        .try_into()
+  desktop\p2ptransfer-cli\src\main.rs:686:        .map_err(|_| anyhow::anyhow!("Invalid server public key length"))?;
+  desktop\p2ptransfer-cli\src\main.rs:687:    let shared_secret = kx.derive_shared_secret(&server_pub_bytes)?;
+  desktop\p2ptransfer-cli\src\main.rs:688:    let mut enc_key =
+  desktop\p2ptransfer-cli\src\main.rs:689:        aead::derive_encryption_key(&shared_secret, b"P2PTRANSFER_SALT_v1", 
+b"p2ptransfer-v1-encryption")?;
+  desktop\p2ptransfer-cli\src\main.rs:690:    let mut nonce_prefix = aead::generate_nonce_prefix();
+  desktop\p2ptransfer-cli\src\main.rs:691:    info!("Key exchange complete");
+  desktop\p2ptransfer-cli\src\main.rs:692:
+  desktop\p2ptransfer-cli\src\main.rs:693:    let engine = Arc::new(TransferEngine::new(4));
+  desktop\p2ptransfer-cli\src\main.rs:694:    let mut metadata = engine.create_metadata(&path, chunk_size).await?;
+  desktop\p2ptransfer-cli\src\main.rs:695:    metadata.nonce_prefix = nonce_prefix;
+  desktop\p2ptransfer-cli\src\main.rs:696:
+  desktop\p2ptransfer-cli\src\main.rs:697:    println!(
+  desktop\p2ptransfer-cli\src\main.rs:698:        "Sending: {} ({} chunks, {} total)",
+  desktop\p2ptransfer-cli\src\main.rs:699:        metadata.file_name,
+  desktop\p2ptransfer-cli\src\main.rs:700:        metadata.total_chunks,
+  desktop\p2ptransfer-cli\src\main.rs:701:        HumanBytes(metadata.file_size)
+  desktop\p2ptransfer-cli\src\main.rs:702:    );
+  desktop\p2ptransfer-cli\src\main.rs:703:
+  desktop\p2ptransfer-cli\src\main.rs:704:    let pb = ProgressBar::new(metadata.file_size);
+  desktop\p2ptransfer-cli\src\main.rs:705:    pb.set_style(
+  desktop\p2ptransfer-cli\src\main.rs:706:        ProgressStyle::default_bar()
+  desktop\p2ptransfer-cli\src\main.rs:707:            .template("{spinner:.green} [{elapsed_precise}] 
+[{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
+  desktop\p2ptransfer-cli\src\main.rs:708:            .unwrap()
+  desktop\p2ptransfer-cli\src\main.rs:709:            .progress_chars("#>-"),
+  desktop\p2ptransfer-cli\src\main.rs:710:    );
+  desktop\p2ptransfer-cli\src\main.rs:711:
+  desktop\p2ptransfer-cli\src\main.rs:712:    let file_size = metadata.file_size;
+  desktop\p2ptransfer-cli\src\main.rs:713:    let file_path = path.clone();
+  desktop\p2ptransfer-cli\src\main.rs:714:
+  desktop\p2ptransfer-cli\src\main.rs:715:    // --- Check for existing partial transfer ---
+  desktop\p2ptransfer-cli\src\main.rs:716:    let resume_manager = Arc::new(
+  desktop\p2ptransfer-cli\src\main.rs:717:        TransferResumeManager::new(config.data_dir.join("resume"))
+  desktop\p2ptransfer-cli\src\main.rs:718:            .context("Failed to initialize resume manager")?,
+  desktop\p2ptransfer-cli\src\main.rs:719:    );
+  desktop\p2ptransfer-cli\src\main.rs:720:    let existing = resume_manager.list_transfers()?.into_iter().find(|t| {
+  desktop\p2ptransfer-cli\src\main.rs:721:        let p = std::path::Path::new(&t.file_path);
+  desktop\p2ptransfer-cli\src\main.rs:722:        p == path
+  desktop\p2ptransfer-cli\src\main.rs:723:            && (t.peer_addr == peer
+  desktop\p2ptransfer-cli\src\main.rs:724:                || t.peer_addr == "127.0.0.1:9877"
+  desktop\p2ptransfer-cli\src\main.rs:725:                || t.peer_addr.contains(&peer))
+  desktop\p2ptransfer-cli\src\main.rs:726:            && !matches!(t.status, TransferStatus::Completed | 
+TransferStatus::Failed)
+  desktop\p2ptransfer-cli\src\main.rs:727:    });
+  desktop\p2ptransfer-cli\src\main.rs:728:
+  desktop\p2ptransfer-cli\src\main.rs:729:    let (session_id, resume_offset) = if let Some(record) = existing {
+  desktop\p2ptransfer-cli\src\main.rs:730:        let offset = record.bytes_transferred.max(0) as u64;
+  desktop\p2ptransfer-cli\src\main.rs:731:        println!(
+  desktop\p2ptransfer-cli\src\main.rs:732:            "Resuming transfer {} ({} bytes already transferred)",
+  desktop\p2ptransfer-cli\src\main.rs:733:            &record.id[..8],
+  desktop\p2ptransfer-cli\src\main.rs:734:            offset
+  desktop\p2ptransfer-cli\src\main.rs:735:        );
+
+

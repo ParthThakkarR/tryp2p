@@ -1,0 +1,1 @@
+use std::fs::File; use std::io::Write; fn main() { let mut f = File::create("test_200m_rnd.bin").unwrap(); let mut buf = vec![0u8; 1024*1024]; let mut seed = 123456789u32; for _ in 0..200 { for i in 0..buf.len() { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; buf[i] = seed as u8; } f.write_all(&buf).unwrap(); } }

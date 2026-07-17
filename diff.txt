@@ -1,0 +1,76 @@
+﻿diff --git a/p2ptransfer-core/src/compress/zstd.rs b/p2ptransfer-core/src/compress/zstd.rs
+index b714b30..6868e38 100644
+--- a/p2ptransfer-core/src/compress/zstd.rs
++++ b/p2ptransfer-core/src/compress/zstd.rs
+@@ -1,15 +1,26 @@
+ use anyhow::{Context, Result};
+ use std::io::Read;
+ 
+-pub const DEFAULT_LEVEL: i32 = 10;
++use std::cell::RefCell;
++use std::collections::HashMap;
++
++pub const DEFAULT_LEVEL: i32 = 3;
+ pub const MAX_LEVEL: i32 = 22;
+ pub const FAST_LEVEL: i32 = 3;
+ 
++thread_local! {
++    static COMPRESSORS: RefCell<HashMap<i32, zstd::bulk::Compressor<'static>>> = RefCell::new(HashMap::new());
++}
++
+ pub fn compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
+     let level = level.clamp(1, MAX_LEVEL);
+-    let compressed = zstd::stream::encode_all(std::io::Cursor::new(data), level)
+-        .context("Zstd compression failed")?;
+-    Ok(compressed)
++    COMPRESSORS.with(|comps| {
++        let mut comps = comps.borrow_mut();
++        let compressor = comps.entry(level).or_insert_with(|| {
++            zstd::bulk::Compressor::new(level).expect("Failed to create zstd compressor")
++        });
++        compressor.compress(data).context("Zstd compression failed")
++    })
+ }
+ 
+ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
+diff --git a/p2ptransfer-core/src/network/tcp.rs b/p2ptransfer-core/src/network/tcp.rs
+index 41cbade..631516f 100644
+--- a/p2ptransfer-core/src/network/tcp.rs
++++ b/p2ptransfer-core/src/network/tcp.rs
+@@ -1,3 +1,4 @@
++
+ use anyhow::{Context, Result};
+ use std::net::SocketAddr;
+ use std::sync::Arc;
+@@ -151,19 +152,21 @@ pub async fn connect(addr: SocketAddr) -> Result<TcpStream> {
+     Ok(stream)
+ }
+ 
+-pub async fn send_message(stream: &mut TcpStream, data: &[u8]) -> Result<()> {
+-    stream
+-        .write_all(&(data.len() as u64).to_be_bytes())
+-        .await
+-        .context("Failed to write message length")?;
+-    stream
+-        .write_all(data)
+-        .await
+-        .context("Failed to write message payload")?;
++use bytes::Buf;
++
++pub async fn send_message<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W, data: &[u8]) -> Result<()> {
++    let len_bytes = (data.len() as u64).to_be_bytes();
++    let mut chained = Buf::chain(&len_bytes[..], data);
++    while chained.has_remaining() {
++        stream
++            .write_buf(&mut chained)
++            .await
++            .context("Failed to write vectored message")?;
++    }
+     Ok(())
+ }
+ 
+-pub async fn receive_message(stream: &mut TcpStream) -> Result<Vec<u8>> {
++pub async fn receive_message<R: tokio::io::AsyncRead + Unpin>(stream: &mut R) -> Result<Vec<u8>> {
+     let mut len_buf = [0u8; 8];
+     stream
+         .read_exact(&mut len_buf)

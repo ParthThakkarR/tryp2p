@@ -15,7 +15,7 @@ candle -dP2P_TARGET_DIR="%P2P_TARGET_DIR%" -dP2P_SRC_DIR="%P2P_SRC_DIR%" -out "%
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 echo Linking MSI...
-light -out "%P2P_SRC_DIR%\target\release\p2ptransfer-0.1.0.msi" "%TEMP%\p2ptransfer.wixobj"
+light -ext WixUIExtension -out "%P2P_SRC_DIR%\target\release\p2ptransfer-0.1.0.msi" "%TEMP%\p2ptransfer.wixobj"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 echo MSI created: target\release\p2ptransfer-0.1.0.msi

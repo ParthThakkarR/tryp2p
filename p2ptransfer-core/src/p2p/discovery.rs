@@ -15,6 +15,7 @@ use super::protocol::{
 pub struct DiscoveryService {
     device_name: String,
     tcp_port: u16,
+    node_id: Option<String>,
     socket: Arc<UdpSocket>,
     peers: Arc<RwLock<HashMap<SocketAddr, PeerInfo>>>,
     running: Arc<std::sync::atomic::AtomicBool>,
@@ -23,32 +24,58 @@ pub struct DiscoveryService {
 
 impl DiscoveryService {
     pub async fn new(device_name: String, tcp_port: u16, discovery_port: u16) -> Result<Self> {
+        Self::new_with_node_id(device_name, tcp_port, discovery_port, None).await
+    }
+
+    pub async fn new_with_node_id(
+        device_name: String,
+        tcp_port: u16,
+        discovery_port: u16,
+        node_id: Option<String>,
+    ) -> Result<Self> {
+        let sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        ).context("Failed to create socket2 UDP socket")?;
+
+        let _ = sock.set_reuse_address(true);
+        #[cfg(not(target_os = "windows"))]
+        let _ = sock.set_reuse_port(true);
+        let _ = sock.set_broadcast(true);
+
         let bind_addr: SocketAddr = format!("0.0.0.0:{discovery_port}")
             .parse()
             .context("Invalid bind address")?;
-        let socket = UdpSocket::bind(bind_addr)
-            .await
-            .context("Failed to bind UDP socket on discovery port")?;
+        let _ = sock.bind(&bind_addr.into());
+
+        let std_socket: std::net::UdpSocket = sock.into();
+        std_socket.set_nonblocking(true)?;
+
+        let socket = UdpSocket::from_std(std_socket).context("Failed to convert to tokio UdpSocket")?;
 
         let multicast_ip: std::net::Ipv4Addr = MULTICAST_GROUP
             .parse()
             .context("Invalid multicast group address")?;
-        socket
-            .join_multicast_v4(multicast_ip, std::net::Ipv4Addr::UNSPECIFIED)
-            .context("Failed to join multicast group")?;
+        let _ = socket.join_multicast_v4(multicast_ip, std::net::Ipv4Addr::UNSPECIFIED);
 
         info!(
-            "Discovery service bound to 0.0.0.0:{DEFAULT_DISCOVERY_PORT}, joined {MULTICAST_GROUP}"
+            "Discovery service bound to 0.0.0.0:{discovery_port}, joined {MULTICAST_GROUP}"
         );
 
         Ok(Self {
             device_name,
             tcp_port,
+            node_id,
             socket: Arc::new(socket),
             peers: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             handles: Vec::new(),
         })
+    }
+
+    pub fn set_node_id(&mut self, node_id: String) {
+        self.node_id = Some(node_id);
     }
 
     pub async fn start(&mut self) -> Result<()> {
@@ -63,6 +90,7 @@ impl DiscoveryService {
             device_name: self.device_name.clone(),
             p2ptransfer_version: env!("CARGO_PKG_VERSION").to_string(),
             tcp_port: self.tcp_port,
+            node_id: self.node_id.clone(),
         };
 
         // Beacon broadcaster
@@ -74,14 +102,14 @@ impl DiscoveryService {
             let multicast_addr: SocketAddr = format!("{MULTICAST_GROUP}:{DEFAULT_DISCOVERY_PORT}")
                 .parse()
                 .expect("Hardcoded multicast address should be valid");
+            let broadcast_addr: SocketAddr = format!("255.255.255.255:{DEFAULT_DISCOVERY_PORT}")
+                .parse()
+                .expect("Hardcoded broadcast address should be valid");
 
             tokio::spawn(async move {
                 while running.load(std::sync::atomic::Ordering::SeqCst) {
-                    if let Err(e) = socket.send_to(&beacon_bytes, multicast_addr).await {
-                        error!("Failed to send beacon: {e}");
-                    } else {
-                        debug!("Beacon sent to {multicast_addr}");
-                    }
+                    let _ = socket.send_to(&beacon_bytes, multicast_addr).await;
+                    let _ = socket.send_to(&beacon_bytes, broadcast_addr).await;
                     tokio::time::sleep(Duration::from_secs(BEACON_INTERVAL_SECS)).await;
                 }
             })
@@ -106,13 +134,19 @@ impl DiscoveryService {
                                     let mut peers = peers.write().await;
                                     let peer_addr = SocketAddr::new(src.ip(), beacon.tcp_port);
                                     match peers.get_mut(&peer_addr) {
-                                        Some(peer) => peer.touch(),
+                                        Some(peer) => {
+                                            peer.touch();
+                                            if beacon.node_id.is_some() {
+                                                peer.node_id = beacon.node_id.clone();
+                                            }
+                                        }
                                         None => {
-                                            let peer = PeerInfo::new(
+                                            let mut peer = PeerInfo::new(
                                                 beacon.device_name.clone(),
                                                 beacon.tcp_port,
                                                 peer_addr,
                                             );
+                                            peer.node_id = beacon.node_id.clone();
                                             info!(
                                                 "Discovered new peer: {} at {}",
                                                 peer.device_name, peer_addr

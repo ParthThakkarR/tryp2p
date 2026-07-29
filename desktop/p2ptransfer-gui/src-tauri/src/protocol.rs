@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
-use tokio::sync::{oneshot, RwLock, Notify};
+use tokio::sync::{oneshot, RwLock, watch};
 use std::future::Future;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -27,57 +27,124 @@ use tauri::Manager;
 /// Our application-level protocol negotiation identifier.
 pub const ALPN: &[u8] = b"p2ptransfer/1";
 
-/// Pause flags: maps request_id → Notify used to pause/resume a transfer.
-/// When a transfer is paused, it waits on the Notify. Resuming calls `notify_waiters()`.
+/// Pause flags: maps request_id → PauseFlag used to pause/resume/cancel a transfer.
 /// Entries are removed when the transfer completes or errors.
 pub static TRANSFER_PAUSE_FLAGS: Lazy<DashMap<String, Arc<PauseFlag>>> =
     Lazy::new(DashMap::new);
 
-/// A pause flag backed by an atomic bool + Notify for instant wakeup.
+/// A pause/cancel flag backed by tokio watch channels.
+///
+/// Using `watch` instead of `Notify` eliminates the lost-wakeup race:
+/// if `resume()` fires before `wait_if_paused()` starts waiting, the
+/// receiver will immediately observe the current `false` value and return.
 pub struct PauseFlag {
-    paused: std::sync::atomic::AtomicBool,
-    notify: Notify,
+    /// pause_tx: current value is `true` when paused, `false` when running.
+    pause_tx: watch::Sender<bool>,
+    /// cancel_tx: current value is `true` once cancelled.
+    cancel_tx: watch::Sender<bool>,
 }
 
 impl PauseFlag {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            paused: std::sync::atomic::AtomicBool::new(false),
-            notify: Notify::new(),
-        })
+        let (pause_tx, _) = watch::channel(false);
+        let (cancel_tx, _) = watch::channel(false);
+        Arc::new(Self { pause_tx, cancel_tx })
     }
 
     pub fn pause(&self) {
-        self.paused.store(true, std::sync::atomic::Ordering::Release);
+        let _ = self.pause_tx.send(true);
     }
 
     pub fn resume(&self) {
-        self.paused.store(false, std::sync::atomic::Ordering::Release);
-        self.notify.notify_waiters();
+        let _ = self.pause_tx.send(false);
     }
 
-    /// Waits until not paused. Returns immediately if not paused.
-    pub async fn wait_if_paused(&self) {
+    pub fn cancel(&self) {
+        let _ = self.cancel_tx.send(true);
+    }
+
+    /// Waits until not paused. Returns `true` if the transfer was cancelled.
+    ///
+    /// Because `watch::Receiver` always holds the latest value, there is no
+    /// lost-wakeup: even if `resume()` fired before we start waiting, we
+    /// will immediately see `paused == false` and return.
+    pub async fn wait_if_paused(&self) -> bool {
+        // Take a snapshot of both receivers.
+        let mut pause_rx  = self.pause_tx.subscribe();
+        let mut cancel_rx = self.cancel_tx.subscribe();
+
         loop {
-            if !self.paused.load(std::sync::atomic::Ordering::Acquire) {
+            // If already cancelled, return immediately.
+            if *cancel_rx.borrow() {
+                return true;
+            }
+            // If not paused, nothing to do.
+            if !*pause_rx.borrow() {
+                return false;
+            }
+            // We are currently paused — wait for either state to change.
+            tokio::select! {
+                biased;
+                _ = cancel_rx.changed() => {
+                    if *cancel_rx.borrow() {
+                        return true;
+                    }
+                }
+                _ = pause_rx.changed() => {
+                    // Loop back to re-check both flags.
+                }
+            }
+        }
+    }
+
+    /// Waits until cancelled.
+    pub async fn wait_for_cancel(&self) {
+        let mut cancel_rx = self.cancel_tx.subscribe();
+        // If already cancelled, return immediately.
+        if *cancel_rx.borrow() {
+            return;
+        }
+        // Otherwise wait for the value to become true.
+        loop {
+            if cancel_rx.changed().await.is_err() {
+                return; // Sender dropped — treat as cancelled.
+            }
+            if *cancel_rx.borrow() {
                 return;
             }
-            // Wait for a resume signal, then re-check the flag.
-            self.notify.notified().await;
         }
     }
 }
 
-/// Read size for streaming from disk / network.
-/// 256 KB: fits well in L2 cache, balances syscall overhead vs latency.
-const STREAM_CHUNK_SIZE: usize = 256 * 1024;
+#[derive(Clone, Serialize, Debug)]
+pub struct ActiveTransferState {
+    pub request_id: String,
+    pub role: String, // "sender" | "receiver"
+    pub status: String,
+    pub file_name: String,
+    pub total_bytes: u64,
+    pub bytes_transferred: u64,
+}
+
+/// Registry of currently active transfers, used to rehydrate the UI after F5 refresh.
+pub static ACTIVE_TRANSFERS: Lazy<DashMap<String, ActiveTransferState>> = Lazy::new(DashMap::new);
+
+/// Read/write block size for streaming from disk to QUIC.
+/// 4 MB: Large enough to amortise per-write syscall overhead on GbE+ links,
+/// while small enough that QUIC can start transmitting before the full chunk
+/// is buffered.  With 32 channel slots this gives 128 MB in-flight — enough
+/// to saturate a 1 Gbps link at ≤100 ms RTT.
+const STREAM_CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
 /// Progress events are emitted no more often than this (milliseconds).
-const PROGRESS_INTERVAL_MS: u64 = 150;
+/// 33ms = ~30 FPS
+const PROGRESS_INTERVAL_MS: u64 = 33;
 
 /// mpsc channel capacity (sender → network / network → disk).
-/// 256 × 256 KB = 64 MB of in-flight data.  Keeps the pipe full on GbE.
-const CHANNEL_CAPACITY: usize = 256;
+/// 32 × 4 MB = 128 MB of in-flight data.  Same memory budget as before
+/// (was 64 × 1 MB = 64 MB), but fewer dequeue operations and larger
+/// writes keep the pipe full on GbE.
+const CHANNEL_CAPACITY: usize = 32;
 
 // ── Wire types ──────────────────────────────────────────────
 
@@ -88,11 +155,15 @@ pub struct TransferRequest {
     pub sender_node_id: String,
     pub file_name: String,
     pub file_size: u64,
+    #[serde(default)]
+    pub resume_offset: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferResponse {
     pub accepted: bool,
+    #[serde(default)]
+    pub resume_offset: u64,
 }
 
 // ── Tauri events emitted to the frontend ──────────────────
@@ -134,6 +205,7 @@ pub struct TransferProgressEvent {
     pub request_id: String,
     pub bytes_transferred: u64,
     pub total: u64,
+    pub speed_bytes_per_sec: f64,
 }
 
 /// Emitted when a transfer completes successfully.
@@ -273,6 +345,20 @@ async fn handle_incoming_connection(
         tracing::warn!(request_id = %request.request_id, "Failed to emit transfer-incoming: {e}");
     }
 
+    ACTIVE_TRANSFERS.insert(request.request_id.clone(), ActiveTransferState {
+        request_id: request.request_id.clone(),
+        role: "receiver".to_string(),
+        status: "waiting_for_accept".to_string(),
+        file_name: request.file_name.clone(),
+        total_bytes: request.file_size,
+        bytes_transferred: 0,
+    });
+
+    // Pre-create the pause flag
+    TRANSFER_PAUSE_FLAGS.insert(request.request_id.clone(), PauseFlag::new());
+
+    crate::open_receive_overlay(request.request_id.clone(), app_handle.clone());
+
     // 3. Wait for frontend response (60-second timeout)
     let accepted = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
         .await
@@ -280,15 +366,25 @@ async fn handle_incoming_connection(
         .unwrap_or(false);
 
     // 4. Send response back to sender
-    if let Err(e) = write_json(&mut send, &TransferResponse { accepted }).await {
+    if let Err(e) = write_json(&mut send, &TransferResponse { accepted, resume_offset: 0 }).await {
         tracing::error!(request_id = %request.request_id, "Failed to send TransferResponse: {e:#}");
         emit_transfer_error(&app_handle, &request.request_id, &format!("Failed to send response: {e}"));
         return Err(e);
     }
+    
+    // Flush the stream immediately so the sender receives the accept signal without QUIC buffering delay.
+    if let Err(e) = send.flush().await {
+        tracing::error!(request_id = %request.request_id, "Failed to flush TransferResponse: {e:#}");
+    }
 
     if !accepted {
         tracing::info!(request_id = %request.request_id, "Transfer rejected by user");
+        ACTIVE_TRANSFERS.remove(&request.request_id);
         return Ok(());
+    }
+
+    if let Some(mut state) = ACTIVE_TRANSFERS.get_mut(&request.request_id) {
+        state.status = "transferring".to_string();
     }
 
     // 5. Receive file data
@@ -296,36 +392,50 @@ async fn handle_incoming_connection(
     let out_dir = output_dir.read().await.clone();
     let out_path = PathBuf::from(&out_dir).join(&request.file_name);
 
-    // Avoid overwriting existing files by appending (1), (2), etc.
-    let final_path = unique_path(&out_path);
+    let is_resume = request.resume_offset > 0 && out_path.exists();
+    let final_path = if is_resume {
+        out_path.clone()
+    } else {
+        unique_path(&out_path)
+    };
+
     if let Err(e) = std::fs::create_dir_all(final_path.parent().unwrap_or(std::path::Path::new("."))) {
         emit_transfer_error(&app_handle, &request.request_id, &format!("Cannot create output directory: {e}"));
         return Err(e.into());
     }
 
-    // PERFORMANCE: Decouple network receive from disk writes using mpsc.
-    // The writer task runs on a blocking thread; the async task reads from the network.
     let (tx, mut rx_chan) = tokio::sync::mpsc::channel::<bytes::Bytes>(CHANNEL_CAPACITY);
     let final_path_clone = final_path.clone();
     let req_id_for_writer = request.request_id.clone();
     let app_handle_for_writer = app_handle.clone();
+    let resume_offset = request.resume_offset;
 
     let writer_task = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        use std::io::Write;
-        let file = std::fs::File::create(&final_path_clone).map_err(|e| {
-            let msg = if e.kind() == std::io::ErrorKind::PermissionDenied {
-                format!("Permission denied writing to {:?}", final_path_clone)
-            } else {
-                format!("Failed to create output file {:?}: {e}", final_path_clone)
-            };
-            tracing::error!(request_id = %req_id_for_writer, "{msg}");
-            emit_transfer_error_blocking(&app_handle_for_writer, &req_id_for_writer, &msg);
-            anyhow::anyhow!(msg)
-        })?;
-
-        // Use a BufWriter for efficient buffered disk I/O.
-        let mut writer = std::io::BufWriter::with_capacity(4 * 1024 * 1024, file);
+        use std::io::{Read, Write};
         let mut hasher = blake3::Hasher::new();
+
+        let file = if is_resume {
+            // Read and hash existing prefix bytes for integrity verification
+            let mut existing = std::fs::File::open(&final_path_clone)?;
+            let mut buf = vec![0u8; 1024 * 1024];
+            let mut read_len = 0u64;
+            while read_len < resume_offset {
+                let to_read = std::cmp::min(buf.len() as u64, resume_offset - read_len) as usize;
+                let n = existing.read(&mut buf[..to_read])?;
+                if n == 0 { break; }
+                hasher.update(&buf[..n]);
+                read_len += n as u64;
+            }
+
+            std::fs::OpenOptions::new()
+                .write(true)
+                .append(true)
+                .open(&final_path_clone)?
+        } else {
+            std::fs::File::create(&final_path_clone)?
+        };
+
+        let mut writer = std::io::BufWriter::with_capacity(STREAM_CHUNK_SIZE, file);
 
         while let Some(chunk) = rx_chan.blocking_recv() {
             hasher.update(&chunk);
@@ -346,38 +456,77 @@ async fn handle_incoming_connection(
     // Read from network and forward to writer task.
     // Pre-clone request_id so we don't clone the String inside the loop.
     let req_id = Arc::<str>::from(request.request_id.as_str());
-    let mut buf = vec![0u8; STREAM_CHUNK_SIZE];
     let mut bytes_received: u64 = 0;
+    
+    // For calculating windowed speed
     let mut last_progress = std::time::Instant::now();
+    let mut speed_window_start = std::time::Instant::now();
+    let mut bytes_in_window = 0u64;
+    let mut current_speed = 0.0;
+    
     let progress_interval = std::time::Duration::from_millis(PROGRESS_INTERVAL_MS);
+
+    // Pre-allocate a reusable read buffer to avoid per-iteration heap allocation.
+    let mut buf = bytes::BytesMut::with_capacity(STREAM_CHUNK_SIZE);
 
     let recv_result: anyhow::Result<()> = async {
         loop {
-            // Check for pause
-            if let Some(flag) = TRANSFER_PAUSE_FLAGS.get(req_id.as_ref()) {
-                flag.wait_if_paused().await;
+            // Check for pause (and wait if paused)
+            let flag_opt = TRANSFER_PAUSE_FLAGS.get(req_id.as_ref()).map(|f| f.clone());
+            if let Some(flag) = &flag_opt {
+                if flag.wait_if_paused().await {
+                    return Err(anyhow::anyhow!("Transfer cancelled by user"));
+                }
             }
 
-            match recv.read(&mut buf).await? {
-                Some(n) if n > 0 => {
-                    // bytes::Bytes::copy_from_slice avoids an extra alloc on the channel
-                    let chunk = bytes::Bytes::copy_from_slice(&buf[..n]);
-                    tx.send(chunk).await.map_err(|_| anyhow::anyhow!("Writer task died"))?;
-                    bytes_received += n as u64;
+            // Reset the buffer for reuse (keeps the underlying allocation).
+            buf.clear();
+            buf.reserve(STREAM_CHUNK_SIZE);
+            
+            // Wait for data OR a cancel event
+            let read_res = if let Some(flag) = &flag_opt {
+                tokio::select! {
+                    res = recv.read_buf(&mut buf) => res,
+                    _ = flag.wait_for_cancel() => return Err(anyhow::anyhow!("Transfer cancelled by user")),
+                }
+            } else {
+                recv.read_buf(&mut buf).await
+            };
+
+            match read_res? {
+                0 => break,
+                n => {
+                    // split_to gives ownership of exactly the read bytes; `buf` retains
+                    // the remaining capacity for the next iteration.
+                    tx.send(buf.split_to(n).freeze()).await.map_err(|_| anyhow::anyhow!("Writer task died"))?;
+                    let bytes = n as u64;
+                    bytes_received += bytes;
+                    bytes_in_window += bytes;
+
+                    // Calculate speed every ~500ms
+                    let window_elapsed = speed_window_start.elapsed().as_secs_f64();
+                    if window_elapsed >= 0.5 {
+                        current_speed = (bytes_in_window as f64) / window_elapsed;
+                        bytes_in_window = 0;
+                        speed_window_start = std::time::Instant::now();
+                    }
 
                     if last_progress.elapsed() > progress_interval {
+                        if let Some(mut state) = ACTIVE_TRANSFERS.get_mut(req_id.as_ref()) {
+                            state.bytes_transferred = bytes_received;
+                        }
                         let _ = app_handle.emit_all(
                             "transfer-progress",
                             TransferProgressEvent {
                                 request_id: req_id.to_string(),
                                 bytes_transferred: bytes_received,
                                 total: request.file_size,
+                                speed_bytes_per_sec: current_speed,
                             },
                         );
                         last_progress = std::time::Instant::now();
                     }
                 }
-                _ => break,
             }
         }
         Ok(())
@@ -396,6 +545,7 @@ async fn handle_incoming_connection(
         let msg = format!("Network error during receive: {e}");
         tracing::error!(request_id = %req_id, "{msg}");
         emit_transfer_error(&app_handle, &req_id, &msg);
+        ACTIVE_TRANSFERS.remove(req_id.as_ref());
         return Err(e);
     }
 
@@ -425,6 +575,8 @@ async fn handle_incoming_connection(
             elapsed_secs: elapsed,
         },
     );
+
+    ACTIVE_TRANSFERS.remove(req_id.as_ref());
 
     Ok(())
 }
@@ -467,7 +619,7 @@ fn unique_path(path: &std::path::Path) -> PathBuf {
 pub async fn send_file_to_peer(
     request_id: String,
     endpoint: &iroh::Endpoint,
-    target_node_id: iroh::PublicKey,
+    target_node: iroh::EndpointAddr,
     file_path: &std::path::Path,
     sender_name: &str,
     app_handle: &tauri::AppHandle,
@@ -486,12 +638,19 @@ pub async fn send_file_to_peer(
         .map_err(|e| anyhow::anyhow!("Cannot stat file: {e}"))?
         .len();
 
-    tracing::info!(request_id = %req_id, target = %target_node_id, "Connecting to peer");
+    tracing::info!(request_id = %req_id, target = %target_node.id, "Connecting to peer");
 
-    let connection = endpoint.connect(target_node_id, ALPN).await.map_err(|e| {
+    // 4s connection timeout for responsive retry when receiver is offline.
+    let connection = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        endpoint.connect(target_node, ALPN)
+    ).await.map_err(|_| {
+        let msg = "Connection timed out".to_string();
+        tracing::debug!(request_id = %req_id, "{msg}");
+        anyhow::anyhow!(msg)
+    })?.map_err(|e| {
         let msg = format!("Failed to connect to peer: {e}");
-        tracing::error!(request_id = %req_id, "{msg}");
-        emit_transfer_error(app_handle, &req_id, &msg);
+        tracing::debug!(request_id = %req_id, "{msg}");
         anyhow::anyhow!(msg)
     })?;
 
@@ -509,72 +668,31 @@ pub async fn send_file_to_peer(
         sender_node_id: endpoint.id().to_string(),
         file_name: file_name.clone(),
         file_size,
+        resume_offset: 0,
     };
+
+    ACTIVE_TRANSFERS.insert(req_id.to_string(), ActiveTransferState {
+        request_id: req_id.to_string(),
+        role: "sender".to_string(),
+        status: "connecting".to_string(),
+        file_name: file_name.clone(),
+        total_bytes: file_size,
+        bytes_transferred: 0,
+    });
+    
+    // Pre-create the pause flag
+    TRANSFER_PAUSE_FLAGS.insert(req_id.to_string(), PauseFlag::new());
+
     write_json(&mut send, &request).await.map_err(|e| {
         let msg = format!("Failed to send TransferRequest: {e}");
         emit_transfer_error(app_handle, &req_id, &msg);
+        ACTIVE_TRANSFERS.remove(req_id.as_ref());
         anyhow::anyhow!(msg)
     })?;
 
     // ── Phase: Waiting for accept ─────────────────────────
     emit_send_status(app_handle, &req_id, "waiting_for_accept");
     tracing::info!(request_id = %req_id, "Waiting for receiver to accept");
-
-    // PERFORMANCE: Pre-spawn the reader task NOW, while waiting for the accept.
-    // This hides the spawn_blocking scheduling latency and ensures the file is
-    // open and buffered the moment we get the accepted signal.
-    let (start_tx, start_rx) = tokio::sync::oneshot::channel::<bool>();
-    let (data_tx, mut data_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(CHANNEL_CAPACITY);
-    let file_path_clone = file_path.to_path_buf();
-    let req_id_for_reader = req_id.clone();
-    let app_handle_reader = app_handle.clone();
-
-    let reader_task = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        // Wait for the "start" signal (true = accepted, false = rejected/timeout)
-        match start_rx.blocking_recv() {
-            Ok(true) => {}
-            _ => {
-                // Rejected or cancelled — exit cleanly without error
-                return Ok(String::new());
-            }
-        }
-
-        use std::io::Read;
-        let file = std::fs::File::open(&file_path_clone).map_err(|e| {
-            let msg = format!("Cannot open file {:?}: {e}", file_path_clone);
-            tracing::error!(request_id = %req_id_for_reader, "{msg}");
-            emit_transfer_error_blocking(&app_handle_reader, &req_id_for_reader, &msg);
-            anyhow::anyhow!(msg)
-        })?;
-
-        // BufReader with 4 MB buffer for sequential read performance.
-        let mut reader = std::io::BufReader::with_capacity(4 * 1024 * 1024, file);
-        let mut hasher = blake3::Hasher::new();
-        let mut buf = vec![0u8; STREAM_CHUNK_SIZE];
-
-        loop {
-            let n = reader.read(&mut buf).map_err(|e| {
-                let msg = format!("File read error: {e}");
-                tracing::error!(request_id = %req_id_for_reader, "{msg}");
-                emit_transfer_error_blocking(&app_handle_reader, &req_id_for_reader, &msg);
-                anyhow::anyhow!(msg)
-            })?;
-
-            if n == 0 {
-                break;
-            }
-
-            hasher.update(&buf[..n]);
-
-            // Send as Bytes (reference-counted; channel send is cheap)
-            if data_tx.blocking_send(bytes::Bytes::copy_from_slice(&buf[..n])).is_err() {
-                // Receiver dropped — network side failed
-                break;
-            }
-        }
-
-        Ok(hasher.finalize().to_hex().to_string())
-    });
 
     // ── Wait for TransferResponse (up to 90 seconds) ──────
     let response: TransferResponse = tokio::time::timeout(
@@ -598,14 +716,66 @@ pub async fn send_file_to_peer(
         let _ = app_handle.emit_all("transfer-rejected", TransferRejectedEvent {
             request_id: req_id.to_string(),
         });
-        // Await reader task so we don't leak it
-        let _ = reader_task.await;
         anyhow::bail!("REJECTED");
     }
 
-    // ── Phase: Accepted — signal reader to start ──────────
+    // ── Phase: Accepted — spawn reader ──────────
     emit_send_status(app_handle, &req_id, "accepted");
-    let _ = start_tx.send(true); // Tell the reader to start immediately
+
+    let (data_tx, mut data_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(CHANNEL_CAPACITY);
+    let file_path_clone = file_path.to_path_buf();
+    let req_id_for_reader = req_id.clone();
+    let app_handle_reader = app_handle.clone();
+
+    let start_offset = response.resume_offset;
+    let reader_task = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(&file_path_clone).map_err(|e| {
+            let msg = format!("Cannot open file {:?}: {e}", file_path_clone);
+            tracing::error!(request_id = %req_id_for_reader, "{msg}");
+            emit_transfer_error_blocking(&app_handle_reader, &req_id_for_reader, &msg);
+            anyhow::anyhow!(msg)
+        })?;
+
+        let mut hasher = blake3::Hasher::new();
+        let mut buf = vec![0u8; STREAM_CHUNK_SIZE];
+        let mut processed = 0u64;
+        while processed < start_offset {
+            let to_read = std::cmp::min(buf.len() as u64, start_offset - processed) as usize;
+            let n = file.read(&mut buf[..to_read])?;
+            if n == 0 { break; }
+            hasher.update(&buf[..n]);
+            processed += n as u64;
+        }
+
+        file.seek(SeekFrom::Start(start_offset))?;
+        let mut reader = std::io::BufReader::with_capacity(STREAM_CHUNK_SIZE, file);
+
+        loop {
+            let mut chunk = vec![0u8; STREAM_CHUNK_SIZE];
+            let n = reader.read(&mut chunk).map_err(|e| {
+                let msg = format!("File read error: {e}");
+                tracing::error!(request_id = %req_id_for_reader, "{msg}");
+                emit_transfer_error_blocking(&app_handle_reader, &req_id_for_reader, &msg);
+                anyhow::anyhow!(msg)
+            })?;
+
+            if n == 0 {
+                break;
+            }
+            
+            chunk.truncate(n);
+            hasher.update(&chunk);
+
+            // Zero-copy conversion from Vec to Bytes
+            if data_tx.blocking_send(bytes::Bytes::from(chunk)).is_err() {
+                // Receiver dropped — network side failed
+                break;
+            }
+        }
+
+        Ok(hasher.finalize().to_hex().to_string())
+    });
 
     // ── Phase: Transferring ────────────────────────────────
     emit_send_status(app_handle, &req_id, "transferring");
@@ -613,32 +783,101 @@ pub async fn send_file_to_peer(
 
     let start = std::time::Instant::now();
     let mut bytes_sent: u64 = 0;
+    
+    // For calculating windowed speed
     let mut last_progress = std::time::Instant::now();
+    let mut speed_window_start = std::time::Instant::now();
+    let mut bytes_in_window = 0u64;
+    let mut current_speed = 0.0;
+    
     let progress_interval = std::time::Duration::from_millis(PROGRESS_INTERVAL_MS);
 
     // Stream chunks from the reader task to the QUIC send stream.
-    while let Some(chunk) = data_rx.recv().await {
-        // Check for pause
-        if let Some(flag) = TRANSFER_PAUSE_FLAGS.get(req_id.as_ref()) {
-            flag.wait_if_paused().await;
+    // Loop structure: pause/cancel check → dequeue (cancel-interruptible) → write (cancel-interruptible)
+    // This ordering ensures that:
+    //   • Pause blocks BEFORE dequeuing the next chunk (reader task also backs up naturally)
+    //   • Cancel can interrupt both the wait-for-chunk and the write-to-network phases
+    loop {
+        // ── Step 1: Check pause/cancel BEFORE dequeuing next chunk ─────────
+        // wait_if_paused: blocks while paused, returns true only if cancelled.
+        let flag_opt = TRANSFER_PAUSE_FLAGS.get(req_id.as_ref()).map(|f| f.clone());
+        if let Some(flag) = &flag_opt {
+            if flag.wait_if_paused().await {
+                let msg = "Transfer cancelled by user";
+                emit_transfer_error(app_handle, &req_id, msg);
+                TRANSFER_PAUSE_FLAGS.remove(req_id.as_ref());
+                return Err(anyhow::anyhow!(msg));
+            }
         }
 
-        send.write_all(&chunk).await.map_err(|e| {
+        // ── Step 2: Dequeue next chunk — interruptible by cancel ───────────
+        let chunk = if let Some(flag) = &flag_opt {
+            tokio::select! {
+                biased; // always poll cancel first so it is never starved
+                _ = flag.wait_for_cancel() => {
+                    let msg = "Transfer cancelled by user";
+                    emit_transfer_error(app_handle, &req_id, msg);
+                    TRANSFER_PAUSE_FLAGS.remove(req_id.as_ref());
+                    return Err(anyhow::anyhow!(msg));
+                }
+                c = data_rx.recv() => match c {
+                    Some(chunk) => chunk,
+                    None => break, // reader task finished — all file data has been sent
+                },
+            }
+        } else {
+            match data_rx.recv().await {
+                Some(c) => c,
+                None => break,
+            }
+        };
+
+        // ── Step 3: Write chunk to QUIC stream — interruptible by cancel ───
+        let write_res = if let Some(flag) = &flag_opt {
+            tokio::select! {
+                biased;
+                _ = flag.wait_for_cancel() => {
+                    let msg = "Transfer cancelled by user";
+                    emit_transfer_error(app_handle, &req_id, msg);
+                    TRANSFER_PAUSE_FLAGS.remove(req_id.as_ref());
+                    return Err(anyhow::anyhow!(msg));
+                }
+                res = send.write_all(&chunk) => res,
+            }
+        } else {
+            send.write_all(&chunk).await
+        };
+
+        write_res.map_err(|e| {
             let msg = format!("Network write error: {e}");
             tracing::error!(request_id = %req_id, "{msg}");
             emit_transfer_error(app_handle, &req_id, &msg);
             anyhow::anyhow!(msg)
         })?;
 
-        bytes_sent += chunk.len() as u64;
+        let bytes = chunk.len() as u64;
+        bytes_sent += bytes;
+        bytes_in_window += bytes;
+
+        // Calculate speed every ~500ms using a sliding window
+        let window_elapsed = speed_window_start.elapsed().as_secs_f64();
+        if window_elapsed >= 0.5 {
+            current_speed = (bytes_in_window as f64) / window_elapsed;
+            bytes_in_window = 0;
+            speed_window_start = std::time::Instant::now();
+        }
 
         if last_progress.elapsed() > progress_interval {
+            if let Some(mut state) = ACTIVE_TRANSFERS.get_mut(req_id.as_ref()) {
+                state.bytes_transferred = bytes_sent;
+            }
             let _ = app_handle.emit_all(
                 "send-progress",
                 TransferProgressEvent {
                     request_id: req_id.to_string(),
                     bytes_transferred: bytes_sent,
                     total: file_size,
+                    speed_bytes_per_sec: current_speed,
                 },
             );
             last_progress = std::time::Instant::now();
@@ -679,12 +918,16 @@ pub async fn send_file_to_peer(
     );
 
     emit_send_status(app_handle, &req_id, "done");
+    ACTIVE_TRANSFERS.remove(req_id.as_ref());
     Ok(hash)
 }
 
 // ── Helper emitters ───────────────────────────────────────
 
 fn emit_send_status(app_handle: &tauri::AppHandle, request_id: &str, status: &str) {
+    if let Some(mut state) = ACTIVE_TRANSFERS.get_mut(request_id) {
+        state.status = status.to_string();
+    }
     let _ = app_handle.emit_all(
         "send-status",
         SendStatusEvent {
@@ -695,6 +938,7 @@ fn emit_send_status(app_handle: &tauri::AppHandle, request_id: &str, status: &st
 }
 
 fn emit_transfer_error(app_handle: &tauri::AppHandle, request_id: &str, error: &str) {
+    ACTIVE_TRANSFERS.remove(request_id);
     let _ = app_handle.emit_all(
         "transfer-error",
         TransferErrorEvent {
@@ -706,7 +950,7 @@ fn emit_transfer_error(app_handle: &tauri::AppHandle, request_id: &str, error: &
 
 /// Blocking version of `emit_transfer_error` for use inside `spawn_blocking` closures.
 fn emit_transfer_error_blocking(app_handle: &tauri::AppHandle, request_id: &str, error: &str) {
-    // `emit_all` is thread-safe and does not require an async context.
+    ACTIVE_TRANSFERS.remove(request_id);
     let _ = app_handle.emit_all(
         "transfer-error",
         TransferErrorEvent {

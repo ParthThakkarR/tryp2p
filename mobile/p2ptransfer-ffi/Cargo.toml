@@ -7,7 +7,7 @@ description = "p2ptransfer FFI bridge - Rust cdylib for Flutter mobile integrati
 
 [lib]
 name = "p2ptransfer_ffi"
-crate-type = ["lib"]
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 p2ptransfer-core = { path = "../../p2ptransfer-core" }

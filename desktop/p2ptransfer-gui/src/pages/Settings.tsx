@@ -444,12 +444,12 @@ export default function Settings() {
           <Field
             id="data-dir"
             label="Data directory"
-            hint="Where BLIP stores its resume database and internal state"
+            hint="Where P2P stores its resume database and internal state"
             value={get("data_dir")}
             onChange={v => set("data_dir", v)}
             error={errors.data_dir}
             mono
-            placeholder="/home/user/.local/share/blip"
+            placeholder="/home/user/.local/share/p2ptransfer"
             isDir
             onBrowse={() => browseDir("data_dir")}
           />
@@ -478,7 +478,7 @@ export default function Settings() {
           <Field
             id="relay-server"
             label="Relay server"
-            hint="Address of a BLIP relay server for cross-network NAT traversal fallback. Leave blank to disable."
+            hint="Address of a P2P relay server for cross-network NAT traversal fallback. Leave blank to disable."
             value={get("relay_server")}
             onChange={v => set("relay_server", v)}
             mono

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { useTransfer } from "../TransferContext";
+import { formatSize, formatSpeed, formatEta } from "../utils";
 
 /* ── Icons ──────────────────────────────────────────────── */
 const CopyIcon = () => (
@@ -23,30 +24,6 @@ const FolderIcon = () => (
   </svg>
 );
 
-function formatSize(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return (bytes / Math.pow(1024, i)).toFixed(1) + " " + units[i];
-}
-
-function formatSpeed(bytesPerSec: number): string {
-  if (bytesPerSec <= 0) return "—";
-  if (bytesPerSec >= 1024 * 1024 * 1024) return (bytesPerSec / (1024 * 1024 * 1024)).toFixed(1) + " GB/s";
-  if (bytesPerSec >= 1024 * 1024) return (bytesPerSec / (1024 * 1024)).toFixed(1) + " MB/s";
-  if (bytesPerSec >= 1024) return (bytesPerSec / 1024).toFixed(0) + " KB/s";
-  return bytesPerSec.toFixed(0) + " B/s";
-}
-
-function formatEta(remainingBytes: number, bytesPerSec: number): string {
-  if (bytesPerSec <= 0) return "—";
-  const secs = Math.ceil(remainingBytes / bytesPerSec);
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
-}
-
-
 /* ── Component ─────────────────────────────────────────── */
 export default function Receive() {
   const [deviceId,    setDeviceId]    = useState("");
@@ -54,11 +31,25 @@ export default function Receive() {
   const [outputDir,   setOutputDir]   = useState("");
   const [isLoading,   setIsLoading]   = useState(true);
   const [copied,      setCopied]      = useState(false);
-  const [wanUrl,      setWanUrl]      = useState("");
-  const [isReceivingWan, setIsReceivingWan] = useState(false);
-  const [wanError,    setWanError]    = useState("");
 
-  const { activeReceiveProgress: activeProgress, receiveSpeed: speed, recentTransfers: recents, receiveError, savedOutputDir, setSavedOutputDir } = useTransfer();
+  const { activeReceiveProgress: activeProgress, receiveSpeed: speed, recentTransfers: recents, receiveError, savedOutputDir, setSavedOutputDir, isPaused, activeRequestId, pauseTransfer, resumeTransfer, cancelTransfer } = useTransfer();
+
+  const togglePause = async () => {
+    // If activeRequestId is available (set by Context tracking)
+    if (activeRequestId) {
+      if (isPaused) {
+        await resumeTransfer(activeRequestId);
+      } else {
+        await pauseTransfer(activeRequestId);
+      }
+    }
+  };
+
+  const doCancel = async () => {
+    if (activeRequestId) {
+      await cancelTransfer(activeRequestId);
+    }
+  };
 
   // Load device ID and output dir.
   // For outputDir, we use the localStorage value first (instant, no flicker),
@@ -116,19 +107,7 @@ export default function Receive() {
     : 0;
   const remaining = activeProgress ? activeProgress.total - activeProgress.sent : 0;
 
-  const handleReceiveWan = async () => {
-    if (!wanUrl) return;
-    setIsReceivingWan(true);
-    setWanError("");
-    try {
-      await invoke("download_wan_tunnel", { url: wanUrl });
-      setWanUrl("");
-    } catch (e: any) {
-      setWanError(e.toString());
-    } finally {
-      setIsReceivingWan(false);
-    }
-  };
+
 
   return (
     <div className="page">
@@ -230,6 +209,15 @@ export default function Receive() {
               </span>
             </div>
 
+            <div className="flex justify-center mt-4" style={{ gap: "var(--sp-2)" }}>
+              <button className="btn btn-ghost btn-sm" onClick={togglePause}>
+                {isPaused ? "▶ Resume Transfer" : "⏸ Pause Transfer"}
+              </button>
+              <button className="btn btn-ghost btn-sm text-red-500" onClick={doCancel} style={{ color: "var(--error)" }}>
+                Cancel
+              </button>
+            </div>
+
           </div>
         )}
 
@@ -240,28 +228,7 @@ export default function Receive() {
           </div>
         )}
 
-        {/* ── High-Speed WAN Link Receive ── */}
-        <div className="panel mb-6">
-          <div className="panel-title-sm">Receive High-Speed WAN Link</div>
-          <div className="flex gap-2 items-center">
-            <input
-              type="text"
-              className="input-field mono w-full"
-              placeholder="Paste WAN Link (https://....trycloudflare.com/...)"
-              value={wanUrl}
-              onChange={(e) => setWanUrl(e.target.value)}
-              disabled={isReceivingWan || (activeProgress !== null)}
-            />
-            <button
-              className="btn btn-primary"
-              onClick={handleReceiveWan}
-              disabled={!wanUrl || isReceivingWan || (activeProgress !== null)}
-            >
-              {isReceivingWan ? "Downloading..." : "Download"}
-            </button>
-          </div>
-          {wanError && <div className="alert alert-error mt-2">{wanError}</div>}
-        </div>
+
 
         {/* ── Recent transfers ── */}
         {recents.length > 0 && (

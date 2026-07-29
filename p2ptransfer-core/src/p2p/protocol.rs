@@ -12,6 +12,8 @@ pub struct Beacon {
     pub device_name: String,
     pub p2ptransfer_version: String,
     pub tcp_port: u16,
+    #[serde(default)]
+    pub node_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -30,7 +30,7 @@ async fn test_metadata_tcp_roundtrip() {
     });
 
     // Client sends metadata
-    let mut stream = tcp::connect(addr).await.unwrap();
+    let mut stream = tcp::connect(addr, 4 * 1024 * 1024).await.unwrap();
     let json = serde_json::to_vec(&meta).unwrap();
     tcp::send_message(&mut stream, &json).await.unwrap();
     let response = tcp::receive_message(&mut stream).await.unwrap();
@@ -82,7 +82,7 @@ async fn test_listen_handler_accepts_metadata() {
         }
     });
 
-    let mut stream = tcp::connect(addr).await.unwrap();
+    let mut stream = tcp::connect(addr, 4 * 1024 * 1024).await.unwrap();
     let json = serde_json::to_vec(&meta).unwrap();
     tcp::send_message(&mut stream, &json).await.unwrap();
     let response = tcp::receive_message(&mut stream).await.unwrap();

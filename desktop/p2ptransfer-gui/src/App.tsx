@@ -1,14 +1,18 @@
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/api/dialog";
 import Home from "./pages/Home";
 import Send from "./pages/Send";
 import Receive from "./pages/Receive";
 import History from "./pages/History";
 import Settings from "./pages/Settings";
+import OverlaySend from "./pages/OverlaySend";
+import OverlayReceive from "./pages/OverlayReceive";
 import { TransferProvider } from "./TransferContext";
 import type { IncomingTransferEvent } from "./types";
+import { useLocation } from "react-router-dom";
 
 /* ── SVG icons (inline, no external dependency) ────────────── */
 const Icons = {
@@ -79,6 +83,40 @@ function TransferPopup({
   onAccept: () => void;
   onReject: () => void;
 }) {
+  const [outputDir, setOutputDir] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    invoke<string>("get_default_download_dir")
+      .then(dir => {
+        setOutputDir(dir);
+        setIsLoading(false);
+      })
+      .catch(() => setIsLoading(false));
+  }, []);
+
+  const pickDir = async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: outputDir || undefined,
+    });
+    if (selected && !Array.isArray(selected)) {
+      setOutputDir(selected);
+    }
+  };
+
+  const handleAccept = async () => {
+    if (outputDir) {
+      try {
+        await invoke("set_output_dir", { dir: outputDir });
+        // Also update local storage so Receive page picks it up later
+        localStorage.setItem("p2ptransfer_output_dir", outputDir);
+      } catch { /* silent */ }
+    }
+    onAccept();
+  };
+
   return (
     <div className="transfer-popup-overlay">
       <div className="transfer-popup">
@@ -106,13 +144,29 @@ function TransferPopup({
               <div className="text-mist text-sm">{formatSize(transfer.file_size)}</div>
             </div>
           </div>
+          
+          <div className="mt-4 pt-4" style={{ borderTop: "1px solid var(--border)" }}>
+            <div className="text-mist text-sm mb-2">Save to:</div>
+            <div className="flex items-center gap-2">
+              <input 
+                type="text" 
+                className="input-field mono w-full" 
+                style={{ fontSize: "0.75rem", padding: "0.3rem 0.5rem" }}
+                value={isLoading ? "Loading..." : outputDir} 
+                readOnly 
+              />
+              <button className="btn btn-secondary btn-sm" onClick={pickDir}>
+                Browse
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="transfer-popup-actions">
           <button className="btn btn-ghost" onClick={onReject} id="reject-transfer-btn">
             Reject
           </button>
-          <button className="btn btn-primary" onClick={onAccept} id="accept-transfer-btn">
+          <button className="btn btn-primary" onClick={handleAccept} id="accept-transfer-btn">
             Accept
           </button>
         </div>
@@ -121,22 +175,62 @@ function TransferPopup({
   );
 }
 
+function AppRoutes() {
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const overlay = searchParams.get("overlay");
+  
+  if (overlay === "send") return <OverlaySend />;
+  if (overlay === "receive") return <OverlayReceive />;
+
+  return (
+    <div className="layout">
+      <nav className="sidebar" role="navigation" aria-label="Main navigation">
+        <div className="sidebar-brand">
+          <div className="sidebar-brand-name">P2P</div>
+          <div className="sidebar-brand-sub">encrypted p2p</div>
+        </div>
+
+        <div className="sidebar-nav">
+          {NAV_ITEMS.map(({ label, path, icon: Icon }) => (
+            <NavLink
+              key={path}
+              to={path}
+              end={path === "/"}
+              className={({ isActive }) =>
+                isActive ? "nav-link active" : "nav-link"
+              }
+              aria-label={label}
+            >
+              <Icon />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+        </div>
+
+        <div className="sidebar-footer">
+          <div className="flex items-center gap-2 mt-2" style={{ fontSize: "var(--text-xs)", color: "var(--mist)", fontFamily: "var(--font-mono)" }}>
+            <Icons.Lock />
+            <span>QUIC · iroh relay</span>
+          </div>
+        </div>
+      </nav>
+      <main className="main-content" role="main">
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/send" element={<Send />} />
+          <Route path="/receive" element={<Receive />} />
+          <Route path="/history" element={<History />} />
+          <Route path="/settings" element={<Settings />} />
+        </Routes>
+      </main>
+    </div>
+  );
+}
+
 /* ── Main app ────────────────────────────────────────────── */
 function App() {
-  const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [incomingTransfer, setIncomingTransfer] = useState<IncomingTransferEvent | null>(null);
-
-  const checkBackend = useCallback(() => {
-    invoke<string>("ping")
-      .then(() => setBackendOk(true))
-      .catch(() => setBackendOk(false));
-  }, []);
-
-  useEffect(() => {
-    checkBackend();
-    const id = setInterval(checkBackend, 10_000);
-    return () => clearInterval(id);
-  }, [checkBackend]);
 
   // Listen for incoming transfer requests
   useEffect(() => {
@@ -168,19 +262,11 @@ function App() {
     setIncomingTransfer(null);
   };
 
-  const dotClass =
-    backendOk === null  ? "status-dot" :
-    backendOk           ? "status-dot online" :
-                          "status-dot offline";
-
-  const dotLabel =
-    backendOk === null  ? "Connecting…" :
-    backendOk           ? "Online — reachable" :
-                          "Backend offline";
-
   return (
     <TransferProvider>
       <BrowserRouter>
+        <AppRoutes />
+        
         {/* ── Incoming transfer popup ── */}
         {incomingTransfer && (
           <TransferPopup
@@ -189,56 +275,6 @@ function App() {
             onReject={handleReject}
           />
         )}
-
-        {/* ── Sidebar ── */}
-        <nav className="sidebar" role="navigation" aria-label="Main navigation">
-          <div className="sidebar-brand">
-            <div className="sidebar-brand-name">BLIP</div>
-            <div className="sidebar-brand-sub">encrypted p2p</div>
-          </div>
-
-          <div className="sidebar-nav">
-            {NAV_ITEMS.map(({ label, path, icon: Icon }) => (
-              <NavLink
-                key={path}
-                to={path}
-                end={path === "/"}
-                className={({ isActive }) =>
-                  isActive ? "nav-link active" : "nav-link"
-                }
-                aria-label={label}
-              >
-                <Icon />
-                <span>{label}</span>
-              </NavLink>
-            ))}
-          </div>
-
-          <div className="sidebar-footer">
-            <div className="backend-status" title={dotLabel}>
-              <div className={dotClass} />
-              <span>{dotLabel}</span>
-            </div>
-            <div
-              className="flex items-center gap-2 mt-2"
-              style={{ fontSize: "var(--text-xs)", color: "var(--mist)", fontFamily: "var(--font-mono)" }}
-            >
-              <Icons.Lock />
-              <span>QUIC · iroh relay</span>
-            </div>
-          </div>
-        </nav>
-
-        {/* ── Main content ── */}
-        <main className="main-content" role="main">
-          <Routes>
-            <Route path="/"         element={<Home />} />
-            <Route path="/send"     element={<Send />} />
-            <Route path="/receive"  element={<Receive />} />
-            <Route path="/history"  element={<History />} />
-            <Route path="/settings" element={<Settings />} />
-          </Routes>
-        </main>
       </BrowserRouter>
     </TransferProvider>
   );

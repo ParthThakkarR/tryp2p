@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import type { ContactEntry } from "../types";
 import { useTransfer } from "../TransferContext";
+import { formatSize, formatSpeed, formatEta } from "../utils";
 
 /* ── Icons ────────────────────────────────────────────────── */
 const FolderIcon = () => (
@@ -57,38 +58,14 @@ function StepIndicator({ steps, current }: { steps: string[]; current: number })
   );
 }
 
-/* ── Helpers ─────────────────────────────────────────────── */
-function formatSize(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return (bytes / Math.pow(1024, i)).toFixed(1) + " " + units[i];
-}
-
-function formatSpeed(bytesPerSec: number): string {
-  if (bytesPerSec <= 0) return "—";
-  if (bytesPerSec >= 1024 * 1024 * 1024) return (bytesPerSec / (1024 * 1024 * 1024)).toFixed(1) + " GB/s";
-  if (bytesPerSec >= 1024 * 1024) return (bytesPerSec / (1024 * 1024)).toFixed(1) + " MB/s";
-  if (bytesPerSec >= 1024) return (bytesPerSec / 1024).toFixed(0) + " KB/s";
-  return bytesPerSec.toFixed(0) + " B/s";
-}
-
-function formatEta(remainingBytes: number, bytesPerSec: number): string {
-  if (bytesPerSec <= 0) return "—";
-  const secs = Math.ceil(remainingBytes / bytesPerSec);
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
-}
+/* ── Helpers removed (moved to utils.ts) ──────────────────── */
 
 /* ── Component ────────────────────────────────────────────── */
 export default function Send() {
   const [contacts,        setContacts]        = useState<ContactEntry[]>([]);
   const [selectedFile,    setSelectedFile]    = useState("");
   const [selectedContact, setSelectedContact] = useState("");
-  const [wanUrl,          setWanUrl]          = useState("");
-  const [isGeneratingWan, setIsGeneratingWan] = useState(false);
-  // Local-only errors (form validation, WAN errors) separate from transfer-error events
+  // Local-only errors (form validation) separate from transfer-error events
   const [localError, setLocalError]           = useState<string | null>(null);
 
   const {
@@ -104,14 +81,12 @@ export default function Send() {
     activeRequestId,
     setActiveRequestId,
     sendStatus,      // live phase label from Rust
-    setSendStatus,   // allows WAN handler to set status text
     sendRejected,    // true when receiver explicitly rejected
     sendError: ctxSendError, // error from transfer-error event
+    isPaused,
     resetSendState,
     startSendTracking
   } = useTransfer();
-
-  const [isPaused, setIsPaused] = useState(false);
 
   const togglePause = async () => {
     if (!activeRequestId) return;
@@ -121,7 +96,13 @@ export default function Send() {
       } else {
         await invoke("pause_transfer", { requestId: activeRequestId });
       }
-      setIsPaused(!isPaused);
+    } catch (e) { console.error(e); }
+  };
+
+  const doCancel = async () => {
+    if (!activeRequestId) return;
+    try {
+      await invoke("cancel_transfer", { requestId: activeRequestId });
     } catch (e) { console.error(e); }
   };
 
@@ -137,7 +118,16 @@ export default function Send() {
 
 
   const pickFile = async () => {
-    const selected = await open({ multiple: false });
+    const selected = await open({ multiple: false, directory: false });
+    if (selected && !Array.isArray(selected)) {
+      setSelectedFile(selected);
+      setLocalError(null);
+      resetSendState();
+    }
+  };
+
+  const pickFolder = async () => {
+    const selected = await open({ multiple: false, directory: true });
     if (selected && !Array.isArray(selected)) {
       setSelectedFile(selected);
       setLocalError(null);
@@ -164,12 +154,12 @@ export default function Send() {
       });
       setSendHash(hash);
       setSendComplete(true);
-      setSendError(null);
+      setLocalError(null);
     } catch (e: unknown) {
       const msg = typeof e === "string" ? e : "Transfer failed.";
       // "REJECTED" is the sentinel returned by the backend when the receiver declines.
       if (msg !== "REJECTED") {
-        setSendError(msg);
+        setLocalError(msg);
       }
       // sendRejected is set by the transfer-rejected event listener in context.
     } finally {
@@ -181,35 +171,10 @@ export default function Send() {
     setSelectedFile("");
     setSelectedContact("");
     setLocalError(null);
-    setWanUrl("");
-    setIsPaused(false);
     resetSendState();
   };
 
-  const handleStartWan = async () => {
-    if (!selectedFile) return;
-    setIsGeneratingWan(true);
-    setLocalError(null);
-    setWanUrl("");
-    setSendStatus("Starting Cloudflare tunnel (may take ~10s)...");
-    
-    try {
-      const url = await invoke<string>("start_wan_tunnel", {
-        path: selectedFile
-      });
-      setWanUrl(url);
-      setSendStatus("");
-    } catch (e: any) {
-      setLocalError(e.toString());
-      setSendStatus("");
-    } finally {
-      setIsGeneratingWan(false);
-    }
-  };
 
-  const copyWanUrl = () => {
-    navigator.clipboard.writeText(wanUrl);
-  };
 
   const filename = selectedFile ? selectedFile.split(/[/\\]/).pop() ?? selectedFile : "";
   const pct = progress && progress.total > 0
@@ -248,8 +213,16 @@ export default function Send() {
               disabled={isSending}
               aria-label="Browse for file"
             >
+              Browse File
+            </button>
+            <button
+              className="btn btn-ghost"
+              onClick={pickFolder}
+              disabled={isSending}
+              aria-label="Browse for folder"
+            >
               <FolderIcon />
-              Browse
+              Folder
             </button>
           </div>
 
@@ -295,8 +268,18 @@ export default function Send() {
                   </div>
                   <div className="peer-info">
                     <div className="peer-name">{c.name}</div>
-                    <div className="peer-addr" style={{ fontSize: "var(--text-xs)" }}>
-                      {c.node_id.slice(0, 12)}…{c.node_id.slice(-6)}
+                    <div className="peer-addr" style={{ fontSize: "var(--text-xs)", display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: c.online ? 'var(--signal)' : 'rgba(255,255,255,0.3)', boxShadow: c.online ? '0 0 6px rgba(0,229,160,0.5)' : 'none' }}></span>
+                        {c.online ? "Online" : "Offline"}
+                        <span style={{ marginLeft: '4px' }}>({c.node_id.slice(0, 12)}…{c.node_id.slice(-6)})</span>
+                      </div>
+                      {/* Only show actionable errors (e.g. "Peer address not found") */}
+                      {c.online === false && c.online_error && (
+                        <div style={{ color: 'var(--ember)', fontSize: '10px' }}>
+                          {c.online_error}
+                        </div>
+                      )}
                     </div>
                   </div>
                   {selectedContact === c.name && (
@@ -313,27 +296,7 @@ export default function Send() {
             </div>
           )}
 
-          <div className="mt-4" style={{ borderTop: "1px solid var(--border)", paddingTop: "1rem" }}>
-            <div className="panel-title-sm mb-2" style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>OR: Generate High-Speed WAN Link</div>
-            {wanUrl ? (
-              <div className="alert alert-success">
-                <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>WAN Link Ready!</div>
-                <div style={{ marginBottom: "0.5rem", fontSize: "0.85rem" }}>Share this link with the receiver. They can download it instantly.</div>
-                <div className="flex items-center gap-2">
-                  <input type="text" className="input-field mono w-full" readOnly value={wanUrl} />
-                  <button className="btn btn-primary" onClick={copyWanUrl}>Copy</button>
-                </div>
-              </div>
-            ) : (
-              <button
-                className="btn btn-secondary w-full"
-                onClick={handleStartWan}
-                disabled={!selectedFile || isGeneratingWan || isSending}
-              >
-                {isGeneratingWan ? "Generating WAN Link..." : "Generate WAN Link (Cloudflare)"}
-              </button>
-            )}
-          </div>
+
         </div>
 
         {/* ── Transfer progress ── */}
@@ -382,12 +345,15 @@ export default function Send() {
 
                 <div className="flex justify-between items-center text-sm text-mist mt-4 mb-2">
                   <span>Elapsed: {elapsedSecs.toFixed(0)}s</span>
-                  <span>Avg: {formatSpeed(speed)}</span>
+                  <span>Avg: {formatSpeed(elapsedSecs > 0 ? progress.sent / elapsedSecs : 0)}</span>
                 </div>
                 
-                <div className="flex justify-center mt-2">
+                <div className="flex justify-center mt-2" style={{ gap: "var(--sp-2)" }}>
                   <button className="btn btn-ghost btn-sm" onClick={togglePause}>
                     {isPaused ? "▶ Resume Transfer" : "⏸ Pause Transfer"}
+                  </button>
+                  <button className="btn btn-ghost btn-sm text-red-500" onClick={doCancel} style={{ color: "var(--error)" }}>
+                    Cancel
                   </button>
                 </div>
               </>

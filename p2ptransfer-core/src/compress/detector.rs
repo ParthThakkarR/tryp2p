@@ -37,6 +37,17 @@ pub fn is_likely_compressed(path: &std::path::Path, first_bytes: &[u8]) -> bool 
 
     false
 }
+pub fn is_likely_compressed_fast(path: &std::path::Path, _first_bytes: &[u8]) -> bool {
+    // Part 8: Don't scan the whole chunk — just check extension
+    // Magic byte check only needs first 16 bytes, not the full 16 MB
+    if let Some(ext) = path.extension() {
+        let ext_str = ext.to_string_lossy().to_lowercase();
+        if ALREADY_COMPRESSED_EXTENSIONS.contains(&ext_str.as_str()) {
+            return true;
+        }
+    }
+    false  // Don't even check magic bytes — pointless for extension-based detection
+}
 
 #[cfg(test)]
 mod tests {

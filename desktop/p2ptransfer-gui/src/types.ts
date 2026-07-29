@@ -43,6 +43,15 @@ export interface Config {
 export interface ContactEntry {
   name: string;
   node_id: string;
+  online?: boolean | null;
+  online_error?: string | null;
+}
+
+export interface FileMetaInfo {
+  path: string;
+  name: string;
+  size: number;
+  is_dir: boolean;
 }
 
 // Incoming transfer event from Tauri backend
@@ -54,11 +63,11 @@ export interface IncomingTransferEvent {
   file_size: number;
 }
 
-// Transfer progress event
 export interface TransferProgressEvent {
   request_id: string;
   bytes_transferred: number;
   total: number;
+  speed_bytes_per_sec: number;
 }
 
 // Transfer complete event

@@ -163,7 +163,9 @@ fn default_chunk_size() -> usize {
     16 * 1024 * 1024
 }
 fn default_compression() -> i32 {
-    10
+    0  // Part 8: zstd level 10 is a CPU bottleneck on LAN
+    // At 20-40 MB/s compression speed, it caps throughput below 1 Gbps
+    // Users can enable with --compression N for WAN links
 }
 fn default_discovery_port() -> u16 {
     9876
@@ -438,8 +440,22 @@ async fn redo_handshake(
 
 async fn try_connect_fallback(
     peer_addr: SocketAddr,
+    _buffer_size: usize,
 ) -> Result<TcpStream> {
-    tcp::connect(peer_addr).await
+    let direct_result = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tcp::connect(peer_addr, 4 * 1024 * 1024),
+    ).await;
+    
+    if let Ok(Ok(s)) = direct_result {
+        return Ok(s);
+    }
+
+    anyhow::bail!(
+        "Failed to connect to {peer_addr}.\n\n\
+         Check that the receiver is listening on port {} at that IP address.",
+        peer_addr.port()
+    )
 }
 
 async fn cmd_send(
@@ -475,7 +491,7 @@ async fn cmd_send(
     let peer_addr_opt: Option<SocketAddr> = resolved_peer.parse().ok();
 
     let mut stream = if let Some(peer_addr) = peer_addr_opt {
-        match try_connect_fallback(peer_addr).await {
+        match try_connect_fallback(peer_addr, 4 * 1024 * 1024).await {
             Ok(s) => s,
             Err(e) => anyhow::bail!("{e}"),
         }
@@ -590,92 +606,168 @@ async fn cmd_send(
         eprintln!("\n[Pause requested — finishing current chunk, then saving state...]");
     });
 
-    // --- Send chunks with retry ---
+    // --- Pipelined Send ---
     let mut bytes_sent: i64 = resume_offset as i64;
-    for chunk_index in start_chunk..metadata.total_chunks {
-        if paused.load(Ordering::SeqCst) {
-            println!(
-                "\nTransfer paused at chunk {}/{} ({} bytes). Resume with same command.",
-                chunk_index,
-                metadata.total_chunks,
-                HumanBytes(bytes_sent as u64)
-            );
-            return Ok(());
-        }
+    
+    let (net_tx, mut net_rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>)>(16);
+    let (err_tx, mut err_rx) = tokio::sync::mpsc::channel::<String>(1);
 
-        let mut last_err = None;
-        for attempt in 0..3 {
-            if attempt > 0 {
-                let delay = Duration::from_secs(1 << attempt); // 2s, 4s backoff
-                eprintln!(
-                    "Retry {}/3 for chunk {} in {}s",
-                    attempt + 1,
-                    chunk_index,
-                    delay.as_secs()
-                );
-                tokio::time::sleep(delay).await;
+    let effective_compression = if peer.starts_with("192.168.") || peer.starts_with("10.") {
+        0  // LAN: no compression, network is fast
+    } else {
+        compression  // WAN: use user-specified compression
+    };
+
+    let path_clone = path.clone();
+    let metadata_clone = metadata.clone();
+    let engine_clone = engine.clone();
+    let err_tx_clone = err_tx.clone();
+    let enc_key_clone = enc_key;
+    let nonce_prefix_clone = nonce_prefix;
+    let paused_for_task = paused.clone();
+
+    tokio::spawn(async move {
+        let mut join_set = tokio::task::JoinSet::new();
+        for chunk_index in start_chunk..metadata_clone.total_chunks {
+            if paused_for_task.load(Ordering::SeqCst) { break; }
+            
+            let chunk_data = match engine_clone.prepare_chunk(&path_clone, &metadata_clone, chunk_index).await {
+                Ok(d) => d,
+                Err(e) => { let _ = err_tx_clone.send(format!("Disk read failed: {e}")).await; break; }
+            };
+            
+            let should_compress = effective_compression > 0 && chunk_data.len() >= 64 && !p2ptransfer_core::compress::detector::is_likely_compressed_fast(&path_clone, &chunk_data);
+            let enc_key_t = enc_key_clone;
+            let nonce_prefix_t = nonce_prefix_clone;
+            let err_tx_t = err_tx_clone.clone();
+            let net_tx_t = net_tx.clone();
+            
+            join_set.spawn(async move {
+                let chunk_result = tokio::task::spawn_blocking(move || {
+                    let (payload, flag) = if should_compress && effective_compression > 0 {
+                        match p2ptransfer_core::compress::zstd::compress(&chunk_data, effective_compression) {
+                            Ok(c) => (c, 1u8),
+                            Err(_) => (chunk_data, 0u8),
+                        }
+                    } else {
+                        (chunk_data, 0u8)
+                    };
+                    
+                    let nonce = aead::build_nonce(&nonce_prefix_t, chunk_index);
+                    let encrypted = match aead::encrypt(&enc_key_t, &nonce, &payload) {
+                        Ok(e) => e,
+                        Err(e) => return Err(format!("Encryption failed: {e}")),
+                    };
+                    
+                    let mut chunk_frame = Vec::with_capacity(5 + encrypted.len());
+                    chunk_frame.extend_from_slice(&(chunk_index as u32).to_le_bytes());
+                    chunk_frame.push(flag);
+                    chunk_frame.extend_from_slice(&encrypted);
+                    Ok((chunk_index, chunk_frame))
+                }).await;
+                
+                match chunk_result {
+                    Ok(Ok(res)) => { let _ = net_tx_t.send(res).await; }
+                    Ok(Err(e)) => { let _ = err_tx_t.send(e).await; }
+                    Err(e) => { let _ = err_tx_t.send(format!("Task panicked: {e}")).await; }
+                }
+            });
+            
+            while join_set.len() >= 8 {
+                join_set.join_next().await;
             }
+        }
+        while let Some(_) = join_set.join_next().await {}
+    });
 
-            match send_chunk_with_ack(
-                &mut stream,
-                &engine,
-                &path,
-                &metadata,
-                chunk_index,
-                compression,
-                &enc_key,
-                &nonce_prefix,
-            )
-            .await
-            {
-                Ok(len) => {
-                    pb.inc(len as u64);
-                    bytes_sent += len;
-                    resume_manager.update_progress(&session_id, bytes_sent)?;
-                    last_err = None;
-                    break;
+    let (mut read_half, mut write_half) = stream.into_split();
+
+    let (ack_tx, mut ack_rx) = tokio::sync::mpsc::channel::<(u8, Vec<u8>)>(1024);
+    tokio::spawn(async move {
+        loop {
+            match receive_tagged(&mut read_half).await {
+                Ok(res) => {
+                    if ack_tx.send(res).await.is_err() { break; }
                 }
                 Err(e) => {
-                    last_err = Some(e);
-                    // Try to reconnect on connection drop
-                    if attempt < 2 {
-                        warn!(
-                            "Chunk {chunk_index} failed (attempt {}/3): {last_err:?}. Reconnecting...",
-                            attempt + 1
-                        );
-                        if let Some(peer_addr) = peer_addr_opt {
-                            match tcp::connect(peer_addr).await {
-                                Ok(new_stream) => {
-                                    stream = new_stream;
-                                    set_nodelay(&stream);
-                                    // Re-do ECDH handshake
-                                    if let Err(handshake_err) =
-                                        redo_handshake(&mut stream, &mut enc_key, &mut nonce_prefix)
-                                            .await
-                                    {
-                                        warn!("Re-handshake failed: {handshake_err:?}");
-                                    }
-                                }
-                                Err(conn_err) => {
-                                    warn!("Reconnect failed: {conn_err:?}");
-                                }
-                            }
-                        } else {
-                            warn!("Reconnect not available for relay connections");
-                        }
-                    }
+                    let _ = ack_tx.send((TAG_ERROR, format!("Read failed: {e}").into_bytes())).await;
+                    break;
                 }
             }
         }
+    });
 
-        if let Some(e) = last_err {
-            resume_manager.fail_transfer(&session_id)?;
-            anyhow::bail!("Failed to send chunk {chunk_index} after 3 retries: {e}");
+    let mut buffered_frames = std::collections::HashMap::new();
+    let mut next_to_send = start_chunk;
+    let mut next_to_ack = start_chunk;
+    let window_size = 32;
+
+    loop {
+        let in_flight = next_to_send - next_to_ack;
+        
+        tokio::select! {
+            Some((chunk_index, chunk_frame)) = net_rx.recv(), if in_flight < window_size => {
+                buffered_frames.insert(chunk_index, chunk_frame);
+                
+                while let Some(frame) = buffered_frames.remove(&next_to_send) {
+                    if let Err(e) = send_tagged(&mut write_half, TAG_CHUNK, &frame).await {
+                        resume_manager.fail_transfer(&session_id).ok();
+                        anyhow::bail!("Network send failed: {e}");
+                    }
+                    next_to_send += 1;
+                }
+            }
+            Some((tag, ack)) = ack_rx.recv() => {
+                if tag == TAG_CHUNK_ACK {
+                    let actual_len = if next_to_ack == metadata.total_chunks - 1 {
+                        metadata.file_size % metadata.chunk_size as u64
+                    } else {
+                        metadata.chunk_size as u64
+                    };
+                    let len_to_inc = if actual_len == 0 { metadata.chunk_size as u64 } else { actual_len };
+                    pb.inc(len_to_inc);
+                    bytes_sent += len_to_inc as i64;
+                    let _ = resume_manager.update_progress(&session_id, bytes_sent);
+                    next_to_ack += 1;
+                    
+                    if next_to_ack == metadata.total_chunks {
+                        break;
+                    }
+                } else if tag == TAG_ERROR {
+                    resume_manager.fail_transfer(&session_id).ok();
+                    anyhow::bail!("Peer error: {}", String::from_utf8_lossy(&ack))
+                } else if tag == TAG_COMPLETE {
+                    resume_manager.fail_transfer(&session_id).ok();
+                    anyhow::bail!("Unexpected COMPLETE tag before all chunks acked")
+                } else {
+                    resume_manager.fail_transfer(&session_id).ok();
+                    anyhow::bail!("Expected CHUNK_ACK, got tag={tag}")
+                }
+            }
+            Some(err) = err_rx.recv() => {
+                resume_manager.fail_transfer(&session_id).ok();
+                anyhow::bail!("Pipeline error: {err}");
+            }
+            else => {
+                break;
+            }
         }
+        
+        if paused.load(Ordering::SeqCst) {
+            break;
+        }
+    }
+    
+    if paused.load(Ordering::SeqCst) || next_to_ack < metadata.total_chunks {
+        println!("\nTransfer paused at chunk {}/{} ({} bytes). Resume with same command.", next_to_ack, metadata.total_chunks, HumanBytes(bytes_sent as u64));
+        return Ok(());
     }
 
     // --- Wait for receiver verification ---
-    let (tag, response) = receive_tagged(&mut stream).await?;
+    let (tag, response) = match ack_rx.recv().await {
+        Some(res) => res,
+        None => anyhow::bail!("Connection closed before verification"),
+    };
     if tag == TAG_COMPLETE {
         let recv_hash = &response[..response.len().min(32)];
         let expected = &metadata.checksum[..];
@@ -709,6 +801,7 @@ async fn cmd_listen(
     discovery.start().await?;
     let resume_manager = Arc::new(TransferResumeManager::new(config.data_dir.join("resume"))?);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
+    println!("Listening for incoming transfers on port {}...", port);
     let (_shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     
     let active_transfers = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
@@ -969,6 +1062,29 @@ impl ReceiverHandler {
         let mut pipeline_error = None;
         let mut join_set = tokio::task::JoinSet::new();
 
+        let (hash_tx, mut hash_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Vec<u8>)>();
+        let expected_checksum = metadata.checksum.clone();
+        let expected_total = metadata.total_chunks;
+        
+        let hasher_task = tokio::task::spawn_blocking(move || {
+            let mut hasher = blake3::Hasher::new();
+            let mut expected_chunk = 0u64;
+            let mut buffered = std::collections::HashMap::new();
+            
+            while let Some((idx, data)) = hash_rx.blocking_recv() {
+                buffered.insert(idx, data);
+                while let Some(chunk_data) = buffered.remove(&expected_chunk) {
+                    hasher.update(&chunk_data);
+                    expected_chunk += 1;
+                }
+            }
+            if expected_chunk == expected_total {
+                hasher.finalize().as_bytes() == &expected_checksum
+            } else {
+                false
+            }
+        });
+
         loop {
             tokio::select! {
                 Some(res) = chunk_rx.recv() => {
@@ -984,6 +1100,7 @@ impl ReceiverHandler {
                             let nonce_prefix = nonce_prefix;
                             let chunk_size = metadata.chunk_size;
                             let file_clone = file_mutex.clone();
+                            let hash_tx_clone = hash_tx.clone();
                             
                             join_set.spawn(async move {
                                 let chunk_data = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
@@ -1000,7 +1117,10 @@ impl ReceiverHandler {
                                 let mut f = file_clone.lock().await;
                                 f.seek(std::io::SeekFrom::Start(offset)).await?;
                                 f.write_all(&chunk_data).await?;
-                                Ok::<_, anyhow::Error>((recv_index, chunk_data.len()))
+                                drop(f);
+                                
+                                let _ = hash_tx_clone.send((recv_index, chunk_data));
+                                Ok::<_, anyhow::Error>((recv_index, ()))
                             });
                         }
                         Err(e) => { pipeline_error = Some(e); break; }
@@ -1008,7 +1128,7 @@ impl ReceiverHandler {
                 }
                 Some(res) = join_set.join_next(), if !join_set.is_empty() => {
                     match res {
-                        Ok(Ok((recv_index, len))) => {
+                        Ok(Ok((recv_index, _))) => {
                             let mut ack = Vec::with_capacity(4);
                             ack.extend_from_slice(&(recv_index as u32).to_le_bytes());
                             if let Err(e) = send_tagged(&mut wh, TAG_CHUNK_ACK, &ack).await {
@@ -1020,20 +1140,15 @@ impl ReceiverHandler {
                             let _ = shared_state.resume_manager.update_progress(&session_id, (old_count + 1) as i64 * metadata.chunk_size as i64);
                             
                             if old_count + 1 == metadata.total_chunks {
-                                let mut f = file_mutex.lock().await;
-                                f.seek(std::io::SeekFrom::Start(0)).await?;
-                                let std_file = f.try_clone().await.expect("Failed to clone").into_std().await;
-                                let hash = tokio::task::spawn_blocking(move || {
-                                    let mut std_file = std_file;
-                                    p2ptransfer_core::transfer::hasher::blake3_hash_reader(&mut std_file)
-                                }).await??;
+                                drop(hash_tx); // Drop local copy
+                                let is_valid = hasher_task.await.unwrap_or(false);
                                 
-                                if hash != metadata.checksum {
-                                    send_tagged(&mut wh, TAG_ERROR, b"Checksum mismatch").await?;
-                                    shared_state.resume_manager.fail_transfer(&session_id)?;
+                                if !is_valid {
+                                    send_tagged(&mut wh, TAG_ERROR, b"Checksum mismatch").await.ok();
+                                    shared_state.resume_manager.fail_transfer(&session_id).ok();
                                 } else {
-                                    send_tagged(&mut wh, TAG_COMPLETE, &metadata.checksum).await?;
-                                    shared_state.resume_manager.complete_transfer(&session_id, &format_hex(&metadata.checksum))?;
+                                    send_tagged(&mut wh, TAG_COMPLETE, &metadata.checksum).await.ok();
+                                    shared_state.resume_manager.complete_transfer(&session_id, &format_hex(&metadata.checksum)).ok();
                                 }
                                 
                                 {

@@ -72,3 +72,46 @@ pub unsafe extern "C" fn p2ptransfer_free_buffer(ptr: *mut u8, len: usize) {
         }
     }
 }
+
+/// Helper to convert C string to Rust str slice safely.
+unsafe fn c_str_to_str<'a>(s: *const c_char) -> &'a str {
+    if s.is_null() {
+        return "";
+    }
+    unsafe { std::ffi::CStr::from_ptr(s).to_str().unwrap_or("") }
+}
+
+/// Discover peers on local network for `duration_secs`.
+/// Returns JSON array of discovered peers as a C string (free with `p2ptransfer_free_string`).
+///
+/// # Safety
+/// `device_name` must be a null-terminated C string or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn p2ptransfer_discover_peers(
+    device_name: *const c_char,
+    duration_secs: u64,
+) -> *mut c_char {
+    let name = unsafe { c_str_to_str(device_name) };
+    let device = if name.is_empty() { "MobileDevice" } else { name };
+
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(r) => r,
+        Err(_) => return CString::new("[]").unwrap().into_raw(),
+    };
+
+    let result = rt.block_on(async {
+        if let Ok(mut discovery) = p2ptransfer_core::p2p::discovery::DiscoveryService::new(device.to_string(), 9877, 9876).await {
+            let _ = discovery.start().await;
+            tokio::time::sleep(std::time::Duration::from_secs(duration_secs.max(1))).await;
+            let peers = discovery.get_peers().await;
+            discovery.stop().await;
+            let json = serde_json::to_string(&peers).unwrap_or_else(|_| "[]".into());
+            json
+        } else {
+            "[]".to_string()
+        }
+    });
+
+    CString::new(result).unwrap().into_raw()
+}
+

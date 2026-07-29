@@ -130,8 +130,8 @@ mod tests {
     #[test]
     fn test_derive_key_produces_consistent_keys() {
         let shared_secret = [0x42; 32];
-        let salt = b"BLIP_SALT_v1";
-        let info = b"BLIP encryption key";
+        let salt = b"P2P_SALT_v1";
+        let info = b"P2P encryption key";
 
         let key1 = derive_encryption_key(&shared_secret, salt, info).unwrap();
         let key2 = derive_encryption_key(&shared_secret, salt, info).unwrap();
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn test_derive_key_different_info_produces_different_keys() {
         let shared_secret = [0x42; 32];
-        let salt = b"BLIP_SALT_v1";
+        let salt = b"P2P_SALT_v1";
 
         let key1 = derive_encryption_key(&shared_secret, salt, b"info1").unwrap();
         let key2 = derive_encryption_key(&shared_secret, salt, b"info2").unwrap();

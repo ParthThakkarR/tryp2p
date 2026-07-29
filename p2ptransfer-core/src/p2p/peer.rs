@@ -9,6 +9,7 @@ pub struct PeerInfo {
     pub tcp_port: u16,
     pub socket_addr: SocketAddr,
     pub last_seen_epoch: u64,
+    pub node_id: Option<String>,
 }
 
 impl PeerInfo {
@@ -19,6 +20,7 @@ impl PeerInfo {
             tcp_port,
             socket_addr,
             last_seen_epoch: now_epoch(),
+            node_id: None,
         }
     }
 

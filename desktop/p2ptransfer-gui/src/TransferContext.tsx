@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/tauri";
 import type { TransferProgressEvent, TransferCompleteEvent } from "./types";
 
 // ── Local-storage keys ────────────────────────────────────
@@ -56,6 +57,10 @@ interface TransferContextValue {
   sendRejected: boolean;
   /** Set when a transfer-error event fires. */
   sendError: string | null;
+  isPaused: boolean;
+  /** True when the user cancelled — overlay windows watch this to auto-close. */
+  wasCancelled: boolean;
+  setWasCancelled: (val: boolean) => void;
 
   // Receive state
   activeReceiveProgress: ProgressState | null;
@@ -71,6 +76,9 @@ interface TransferContextValue {
   // Controls
   resetSendState: () => void;
   startSendTracking: () => void;
+  pauseTransfer: (id: string) => Promise<void>;
+  resumeTransfer: (id: string) => Promise<void>;
+  cancelTransfer: (id: string) => Promise<void>;
 }
 
 const TransferContext = createContext<TransferContextValue | null>(null);
@@ -86,6 +94,9 @@ export function TransferProvider({ children }: { children: ReactNode }) {
   const [sendStatus, setSendStatus]           = useState("");
   const [sendRejected, setSendRejected]       = useState(false);
   const [sendError, setSendError]             = useState<string | null>(null);
+  const [isPaused, setIsPaused]               = useState(false);
+  // wasCancelled: set true when cancel fires; overlays watch this to auto-close their window
+  const [wasCancelled, setWasCancelled]       = useState(false);
 
   // Restore activeRequestId from localStorage (survives F5 if it slips through)
   const [activeRequestId, _setActiveRequestId] = useState<string | null>(() =>
@@ -120,20 +131,29 @@ export function TransferProvider({ children }: { children: ReactNode }) {
   const sendPrevTime    = useRef(Date.now());
   const sendStartTime   = useRef(Date.now());
 
-  const recvPrevBytes   = useRef(0);
-  const recvPrevTime    = useRef(Date.now());
   const recvTotalBytes  = useRef(0);
+  const totalPauseDuration = useRef(0);
+  const pauseStartTime  = useRef<number | null>(null);
 
   // ── Helper actions ───────────────────────────────────────
   const startSendTracking = () => {
+    // Reset ALL send state so no stale values bleed from a previous transfer.
     setSendProgress(null);
     setSendSpeed(0);
     setSendElapsedSecs(0);
     setSendRejected(false);
     setSendError(null);
+    setSendHash("");
+    setSendComplete(false);
+    setSendStatus("");
+    setIsPaused(false);
+    setActiveRequestId(null);
+    // wasCancelled is intentionally NOT reset here - overlays watch it to close.
     sendPrevBytes.current  = 0;
     sendPrevTime.current   = Date.now();
     sendStartTime.current  = Date.now();
+    totalPauseDuration.current = 0;
+    pauseStartTime.current = null;
   };
 
   const resetSendState = () => {
@@ -147,11 +167,14 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     setSendRejected(false);
     setSendError(null);
     setActiveRequestId(null);
+    setIsPaused(false);
+    // NOTE: do NOT reset wasCancelled here — overlays need to see it to close themselves
   };
 
   // ── Map backend status strings to human-readable labels ──
   function statusLabel(status: string): string {
     switch (status) {
+      case "queued":             return "Queued — waiting for receiver to come online…";
       case "connecting":        return "Connecting to peer…";
       case "waiting_for_accept": return "Waiting for receiver to accept…";
       case "accepted":           return "Accepted — starting transfer…";
@@ -163,20 +186,33 @@ export function TransferProvider({ children }: { children: ReactNode }) {
 
   // ── Event listeners ──────────────────────────────────────
   useEffect(() => {
+    // 0. Rehydrate active transfers on mount
+    import("@tauri-apps/api/tauri").then(({ invoke }) => {
+      invoke<any[]>("get_active_transfers")
+        .then((active) => {
+          if (active.length > 0) {
+            const t = active[0];
+            if (t.role === "sender") {
+              setIsSending(true);
+              setSendStatus(statusLabel(t.status));
+              setSendProgress({ sent: t.bytes_transferred, total: t.total_bytes });
+              setActiveRequestId(t.request_id);
+            } else if (t.role === "receiver") {
+              setActiveReceiveProgress({ sent: t.bytes_transferred, total: t.total_bytes });
+            }
+          }
+        })
+        .catch(console.error);
+    });
+
     // 1. Send progress
     const unlistenSendProgress = listen<TransferProgressEvent>("send-progress", (event) => {
+      setSendSpeed(event.payload.speed_bytes_per_sec || 0);
+
       const now = Date.now();
-      const bytesDelta = event.payload.bytes_transferred - sendPrevBytes.current;
-      const timeDelta  = (now - sendPrevTime.current) / 1000;
-
-      if (timeDelta > 0.05 && bytesDelta > 0) {
-        const speed = bytesDelta / timeDelta;
-        setSendSpeed(prev => prev === 0 ? speed : prev * 0.7 + speed * 0.3);
-      }
-
-      sendPrevBytes.current = event.payload.bytes_transferred;
-      sendPrevTime.current  = now;
-      setSendElapsedSecs((now - sendStartTime.current) / 1000);
+      const pauseAdjustment = totalPauseDuration.current + (pauseStartTime.current ? now - pauseStartTime.current : 0);
+      setSendElapsedSecs((now - sendStartTime.current - pauseAdjustment) / 1000);
+      
       setSendProgress({ sent: event.payload.bytes_transferred, total: event.payload.total });
     });
 
@@ -202,39 +238,13 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       setIsSending(false);
     });
 
-    // 5. Receive progress (iroh QUIC path uses "transfer-progress")
     const unlistenRecvProgress = listen<TransferProgressEvent>("transfer-progress", (event) => {
-      const now = Date.now();
-      const bytesDelta = event.payload.bytes_transferred - recvPrevBytes.current;
-      const timeDelta  = (now - recvPrevTime.current) / 1000;
+      setReceiveSpeed(event.payload.speed_bytes_per_sec || 0);
 
-      if (timeDelta > 0.05 && bytesDelta > 0) {
-        const speed = bytesDelta / timeDelta;
-        setReceiveSpeed(prev => prev === 0 ? speed : prev * 0.7 + speed * 0.3);
-      }
-
-      recvPrevBytes.current  = event.payload.bytes_transferred;
-      recvPrevTime.current   = now;
       recvTotalBytes.current = event.payload.total;
       setActiveReceiveProgress({ sent: event.payload.bytes_transferred, total: event.payload.total });
       setReceiveError(null); // clear any previous error once data starts flowing
-    });
-
-    // 6. Receive progress (WAN download path uses "receive-progress")
-    const unlistenWanProgress = listen<TransferProgressEvent>("receive-progress", (event) => {
-      const now = Date.now();
-      const bytesDelta = event.payload.bytes_transferred - recvPrevBytes.current;
-      const timeDelta  = (now - recvPrevTime.current) / 1000;
-
-      if (timeDelta > 0.05 && bytesDelta > 0) {
-        const speed = bytesDelta / timeDelta;
-        setReceiveSpeed(prev => prev === 0 ? speed : prev * 0.7 + speed * 0.3);
-      }
-
-      recvPrevBytes.current  = event.payload.bytes_transferred;
-      recvPrevTime.current   = now;
-      recvTotalBytes.current = event.payload.total;
-      setActiveReceiveProgress({ sent: event.payload.bytes_transferred, total: event.payload.total });
+      setActiveRequestId(event.payload.request_id);
     });
 
     // 7. Transfer complete
@@ -250,7 +260,36 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       setActiveReceiveProgress(null);
       setReceiveSpeed(0);
       setReceiveError(null);
-      recvPrevBytes.current = 0;
+      setIsPaused(false);
+    });
+
+    const unlistenPaused = listen("transfer-paused", () => {
+      setIsPaused(true);
+      if (!pauseStartTime.current) pauseStartTime.current = Date.now();
+    });
+
+    const unlistenResumed = listen("transfer-resumed", () => {
+      setIsPaused(false);
+      if (pauseStartTime.current) {
+        totalPauseDuration.current += Date.now() - pauseStartTime.current;
+        pauseStartTime.current = null;
+      }
+    });
+
+    const unlistenCancelled = listen("transfer-cancelled", () => {
+      // BUG #5 fix: reset ALL send-side state, not just isSending.
+      // Without this, stale sendProgress/sendStatus/sendHash/activeRequestId
+      // linger and can be briefly visible if a new send overlay opens before
+      // the first event from the new transfer overwrites them.
+      resetSendState();
+      // Also clear the receive side in case the receiver cancelled.
+      setIsPaused(false);
+      setActiveReceiveProgress(null);
+      setReceiveSpeed(0);
+      // Signal all overlay windows to close themselves.
+      // NOTE: set wasCancelled AFTER resetSendState so the overlay's useEffect
+      // sees the clean state before triggering appWindow.close().
+      setWasCancelled(true);
     });
 
     return () => {
@@ -259,10 +298,24 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       unlistenRejected.then(fn => fn());
       unlistenError.then(fn => fn());
       unlistenRecvProgress.then(fn => fn());
-      unlistenWanProgress.then(fn => fn());
       unlistenComplete.then(fn => fn());
+      unlistenPaused.then(fn => fn());
+      unlistenResumed.then(fn => fn());
+      unlistenCancelled.then(fn => fn());
     };
   }, []);
+
+  const pauseTransfer = async (id: string) => {
+    try { await invoke("pause_transfer", { requestId: id }); } catch (e) { console.error(e); }
+  };
+
+  const resumeTransfer = async (id: string) => {
+    try { await invoke("resume_transfer", { requestId: id }); } catch (e) { console.error(e); }
+  };
+
+  const cancelTransfer = async (id: string) => {
+    try { await invoke("cancel_transfer", { requestId: id }); } catch (e) { console.error(e); }
+  };
 
   return (
     <TransferContext.Provider value={{
@@ -273,11 +326,13 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       activeRequestId, setActiveRequestId,
       sendStatus, setSendStatus,
       sendRejected,
-      sendError,
+      sendError, isPaused,
+      wasCancelled, setWasCancelled,
       activeReceiveProgress, receiveSpeed, recentTransfers,
       receiveError,
       savedOutputDir, setSavedOutputDir,
       resetSendState, startSendTracking,
+      pauseTransfer, resumeTransfer, cancelTransfer,
     }}>
       {children}
     </TransferContext.Provider>

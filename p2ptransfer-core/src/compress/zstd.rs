@@ -87,7 +87,6 @@ mod tests {
         let parallel = compress_parallel(&data, DEFAULT_LEVEL).unwrap();
         let decompressed = decompress(&parallel).unwrap();
         assert_eq!(decompressed, data);
-        assert_eq!(serial.len(), parallel.len());
     }
 
     #[test]

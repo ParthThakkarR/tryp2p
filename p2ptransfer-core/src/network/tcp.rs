@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, TcpSocket};
 use tracing::{debug, error, info, warn};
 
 pub const DEFAULT_TCP_PORT: u16 = 9877;
@@ -13,6 +13,7 @@ pub type MessageHandler = Arc<dyn Fn(Vec<u8>, SocketAddr) -> Result<Vec<u8>> + S
 
 pub struct TcpServer {
     port: u16,
+    buffer_size: usize,
     listener: Option<TcpListener>,
     handler: Option<MessageHandler>,
     running: Arc<std::sync::atomic::AtomicBool>,
@@ -22,10 +23,16 @@ impl TcpServer {
     pub fn new(port: u16) -> Self {
         Self {
             port,
+            buffer_size: 4 * 1024 * 1024,
             listener: None,
             handler: None,
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    pub fn with_buffer_size(mut self, size: usize) -> Self {
+        self.buffer_size = size;
+        self
     }
 
     pub fn with_handler(mut self, handler: MessageHandler) -> Self {
@@ -46,9 +53,18 @@ impl TcpServer {
             .parse()
             .context("Invalid bind address")?;
 
-        let listener = TcpListener::bind(addr)
-            .await
-            .context("Failed to bind TCP listener")?;
+        let socket = if addr.is_ipv4() {
+            TcpSocket::new_v4()?
+        } else {
+            TcpSocket::new_v6()?
+        };
+        
+        let _ = socket.set_reuseaddr(true);
+        let _ = socket.set_recv_buffer_size(self.buffer_size as u32);
+        let _ = socket.set_send_buffer_size(self.buffer_size as u32);
+        
+        socket.bind(addr).context("Failed to bind TCP listener")?;
+        let listener = socket.listen(1024).context("Failed to listen on TCP socket")?;
         self.listener = Some(listener);
         self.running
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -76,6 +92,7 @@ impl TcpServer {
             match listener.accept().await {
                 Ok((stream, addr)) => {
                     debug!("New TCP connection from {addr}");
+                    let _ = configure_socket(&stream);
                     let handler = handler.clone();
                     let running = running.clone();
                     tokio::spawn(async move {
@@ -145,18 +162,39 @@ async fn handle_connection(
     Ok(())
 }
 
-pub async fn connect(addr: SocketAddr) -> Result<TcpStream> {
-    let stream = TcpStream::connect(addr)
+pub fn configure_socket(stream: &TcpStream) -> Result<()> {
+    let _ = stream.set_nodelay(true);
+    let sock = socket2::SockRef::from(stream);
+    // 32 MB socket buffers: keeps multi-gigabit pipes full (BDP << 32 MB even at 100ms RTT)
+    let _ = sock.set_send_buffer_size(32 * 1024 * 1024);
+    let _ = sock.set_recv_buffer_size(32 * 1024 * 1024);
+    let keepalive = socket2::TcpKeepalive::new().with_time(std::time::Duration::from_secs(60));
+    let _ = sock.set_tcp_keepalive(&keepalive);
+    Ok(())
+}
+
+pub async fn connect(addr: SocketAddr, buffer_size: usize) -> Result<TcpStream> {
+    let socket = if addr.is_ipv4() {
+        TcpSocket::new_v4()?
+    } else {
+        TcpSocket::new_v6()?
+    };
+    
+    let _ = socket.set_recv_buffer_size(buffer_size as u32);
+    let _ = socket.set_send_buffer_size(buffer_size as u32);
+
+    let stream = socket.connect(addr)
         .await
         .context(format!("Failed to connect to {addr}"))?;
+        
+    let _ = configure_socket(&stream);
     Ok(stream)
 }
 
 pub async fn send_message<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W, data: &[u8]) -> Result<()> {
-    let mut framed = Vec::with_capacity(8 + data.len());
-    framed.extend_from_slice(&(data.len() as u64).to_be_bytes());
-    framed.extend_from_slice(data);
-    stream.write_all(&framed).await.context("Failed to write message")?;
+    let len_bytes = (data.len() as u64).to_be_bytes();
+    stream.write_all(&len_bytes).await.context("Failed to write message length")?;
+    stream.write_all(data).await.context("Failed to write message payload")?;
     Ok(())
 }
 
@@ -196,7 +234,7 @@ mod tests {
             send_message(&mut stream, b"hello client").await.unwrap();
         });
 
-        let mut stream = connect(addr).await.unwrap();
+        let mut stream = connect(addr, 4 * 1024 * 1024).await.unwrap();
         send_message(&mut stream, b"hello server").await.unwrap();
         let response = receive_message(&mut stream).await.unwrap();
         assert_eq!(response, b"hello client");
@@ -254,7 +292,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-        let mut stream = connect(addr).await.unwrap();
+        let mut stream = connect(addr, 4 * 1024 * 1024).await.unwrap();
         send_message(&mut stream, b"ping").await.unwrap();
         let response = receive_message(&mut stream).await.unwrap();
         assert_eq!(
@@ -281,7 +319,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-        let mut stream = connect(addr).await.unwrap();
+        let mut stream = connect(addr, 4 * 1024 * 1024).await.unwrap();
         send_message(&mut stream, b"hello").await.unwrap();
         let response = receive_message(&mut stream).await.unwrap();
         assert_eq!(response, b"world");

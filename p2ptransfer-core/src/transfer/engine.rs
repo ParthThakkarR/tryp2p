@@ -127,7 +127,7 @@ impl TransferEngine {
         use tokio::io::AsyncReadExt;
 
         let mut buf = vec![0u8; length];
-        let mut reader = tokio::io::BufReader::new(file);
+        let mut reader = tokio::io::BufReader::with_capacity(4 * 1024 * 1024, file);
         use tokio::io::AsyncSeekExt;
         reader.seek(std::io::SeekFrom::Start(offset)).await?;
         reader.read_exact(&mut buf).await?;
@@ -160,7 +160,7 @@ impl TransferEngine {
 
         use tokio::io::AsyncSeekExt;
         use tokio::io::AsyncWriteExt;
-        let mut writer = tokio::io::BufWriter::new(file);
+        let mut writer = tokio::io::BufWriter::with_capacity(4 * 1024 * 1024, file);
         writer.seek(std::io::SeekFrom::Start(offset)).await?;
         writer.write_all(data).await?;
         writer.flush().await?;

@@ -75,8 +75,11 @@ class DeviceIdentityService {
   void _deriveIdentifiers() {
     if (_keySeed == null) return;
 
-    // Full key: hex of all 32 bytes
-    _fullKeyHex = _keySeed!.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    // Full key: hex of all 32 bytes (uppercase for display/comparison)
+    _fullKeyHex = _keySeed!
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join()
+        .toUpperCase();
 
     // Short ID: mix seed bytes with XOR + rotate to get a deterministic
     // pseudo-hash, then take first 4 bytes as 8 hex chars.
@@ -90,7 +93,10 @@ class DeviceIdentityService {
     });
 
     final shortBytes = mixed.take(4).toList();
-    final hex = shortBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final hex = shortBytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join()
+        .toUpperCase();
     _shortId = '${hex.substring(0, 4)}-${hex.substring(4)}';
   }
 }

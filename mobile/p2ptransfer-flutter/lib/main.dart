@@ -5,6 +5,8 @@ import 'src/receive_page.dart';
 import 'src/history_page.dart';
 import 'src/settings_page.dart';
 import 'src/device_identity_service.dart';
+import 'src/transfer_service.dart';
+import 'src/contacts_service.dart';
 
 /// Global device identity service instance.
 final DeviceIdentityService deviceIdentity = DeviceIdentityService();
@@ -12,6 +14,9 @@ final DeviceIdentityService deviceIdentity = DeviceIdentityService();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await deviceIdentity.initialize();
+  await ContactsService.instance.load();
+  // Start listening for incoming transfers immediately
+  await TransferService.instance.startListening(port: AppSettings.tcpPort);
   runApp(const P2PTransferApp());
 }
 

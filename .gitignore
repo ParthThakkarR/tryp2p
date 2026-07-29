@@ -1,6 +1,8 @@
 # Rust
 target/
 **/*.rs.bk
+**/*.rlib
+**/*.pdb
 
 # Node / Web / Tauri
 node_modules/
@@ -17,27 +19,67 @@ desktop/*/dist/
 *.dll
 *.so
 *.dylib
+*.zip
+*.msi
+
+# WiX toolset binaries (checked-in by accident)
+wix_bin/
+wix.zip
+
+# Scratch/dev scripts and patchers in root
+benchmark_tcp.rs
+benchmark_tcp.exe
+final_patcher*.rs
+final_patcher*.exe
+fixer.rs
+fixer.exe
+gen.rs
+gen.exe
+inject_impls.rs
+inject_impls.exe
+patch*.rs
+patch_main.*
+patcher*.rs
+patcher*.exe
+patcher_proj/
+rewrite.rs
+rewrite.exe
+rewrite_cmd_send.py
+test.rs
+test_iroh.rs
+test_vectored.rs
+zstd_test.rs
+fix.ps1
+fix.py
+fix_cli_pipeline.py
+convert.ps1
+remove_bom.ps1
+strip_bom.ps1
+build_summary.*
+build-windows.ps1
+build-gui-msi.ps1
+run_all_sessions.ps1
+run_benchmark.ps1
+run_curl_test.sh
+speedtest.py
+patch.py
+
+# Large test files
+large_test.bin
+resume_test.bin
+test_*.bin
+crypto_test.bin
 
 # Logs and debug output
 *.log
 *.err
 *.out
+*.txt
+!README.md
+!ARCHITECTURE.md
+!AGENTS.md
+!LICENSE
 diagnostic_log*.txt
-build-results.txt
-test-results.txt
-cmd_send_check.txt
-cmd_send_now.txt
-send_full.txt
-send_utf8.txt
-send.txt
-rx.txt
-listen.txt
-listen_utf8.txt
-handler.txt
-diff.txt
-output.txt
-test_relay.txt
-test_wan.txt
 
 # Testing output directories
 test_output*/
@@ -61,6 +103,4 @@ Thumbs.db
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
-build/
 flutter/
-

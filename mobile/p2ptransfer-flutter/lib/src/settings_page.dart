@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
 
@@ -85,7 +85,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     children: [
                       Text('Device Key',
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurface.withOpacity(0.6),
+                            color: colorScheme.onSurface.withValues(alpha: 0.6),
                           )),
                       const Spacer(),
                       InkWell(
@@ -131,7 +131,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     child: Row(
                       children: [
                         Icon(Icons.key, size: 14,
-                            color: colorScheme.onSurface.withOpacity(0.4)),
+                            color: colorScheme.onSurface.withValues(alpha: 0.4)),
                         const SizedBox(width: 6),
                         Text(
                           _showFullKey ? 'Hide full key' : 'Show full key',
@@ -163,7 +163,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         style: theme.textTheme.bodySmall?.copyWith(
                           fontFamily: 'monospace',
                           fontSize: 11,
-                          color: colorScheme.onSurface.withOpacity(0.7),
+                          color: colorScheme.onSurface.withValues(alpha: 0.7),
                         ),
                       ),
                     ),
@@ -253,7 +253,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   Text(
                     'Lower is faster on high-speed LANs',
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurface.withOpacity(0.5),
+                      color: colorScheme.onSurface.withValues(alpha: 0.5),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -270,10 +270,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     children: [
                       Text('Level 1 (Fast)',
                           style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurface.withOpacity(0.4))),
+                              color: colorScheme.onSurface.withValues(alpha: 0.4))),
                       Text('Level 22 (Max)',
                           style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurface.withOpacity(0.4))),
+                              color: colorScheme.onSurface.withValues(alpha: 0.4))),
                     ],
                   ),
                 ],

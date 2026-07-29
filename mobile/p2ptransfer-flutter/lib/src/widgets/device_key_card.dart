@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 /// A polished card that displays the device's short key prominently,
@@ -38,7 +38,7 @@ class DeviceKeyCard extends StatelessWidget {
           gradient: LinearGradient(
             colors: [
               colorScheme.primaryContainer,
-              colorScheme.primaryContainer.withOpacity(0.6),
+              colorScheme.primaryContainer.withValues(alpha: 0.6),
             ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -54,7 +54,7 @@ class DeviceKeyCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: colorScheme.primary.withOpacity(0.15),
+                    color: colorScheme.primary.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(Icons.vpn_key, color: colorScheme.primary, size: 22),
@@ -67,14 +67,14 @@ class DeviceKeyCard extends StatelessWidget {
                       Text(
                         'Your Device Key',
                         style: theme.textTheme.titleSmall?.copyWith(
-                          color: colorScheme.onPrimaryContainer.withOpacity(0.7),
+                          color: colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
                         ),
                       ),
                       if (deviceName.isNotEmpty)
                         Text(
                           deviceName,
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onPrimaryContainer.withOpacity(0.5),
+                            color: colorScheme.onPrimaryContainer.withValues(alpha: 0.5),
                           ),
                         ),
                     ],
@@ -89,10 +89,10 @@ class DeviceKeyCard extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                 decoration: BoxDecoration(
-                  color: colorScheme.surface.withOpacity(0.5),
+                  color: colorScheme.surface.withValues(alpha: 0.5),
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                    color: colorScheme.primary.withOpacity(0.2),
+                    color: colorScheme.primary.withValues(alpha: 0.2),
                     width: 1,
                   ),
                 ),
@@ -122,13 +122,13 @@ class DeviceKeyCard extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: colorScheme.surface.withOpacity(0.3),
+                    color: colorScheme.surface.withValues(alpha: 0.3),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.key, size: 12, color: colorScheme.onPrimaryContainer.withOpacity(0.4)),
+                      Icon(Icons.key, size: 12, color: colorScheme.onPrimaryContainer.withValues(alpha: 0.4)),
                       const SizedBox(width: 6),
                       Flexible(
                         child: Text(
@@ -136,7 +136,7 @@ class DeviceKeyCard extends StatelessWidget {
                               ? '${fullKeyHex.substring(0, 16)}...${fullKeyHex.substring(fullKeyHex.length - 8)}'
                               : fullKeyHex,
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onPrimaryContainer.withOpacity(0.4),
+                            color: colorScheme.onPrimaryContainer.withValues(alpha: 0.4),
                             fontFamily: 'monospace',
                             fontSize: 10,
                           ),
@@ -176,14 +176,14 @@ class DeviceKeyCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: colorScheme.primary.withOpacity(0.12),
+                  color: colorScheme.primary.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(Icons.vpn_key, color: colorScheme.primary, size: 16),
               ),
               const SizedBox(width: 10),
               Text('Device Key', style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurface.withOpacity(0.6),
+                color: colorScheme.onSurface.withValues(alpha: 0.6),
               )),
               const Spacer(),
               Text(
@@ -195,7 +195,7 @@ class DeviceKeyCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
-              Icon(Icons.copy, size: 16, color: colorScheme.onSurface.withOpacity(0.4)),
+              Icon(Icons.copy, size: 16, color: colorScheme.onSurface.withValues(alpha: 0.4)),
             ],
           ),
         ),
@@ -218,7 +218,7 @@ class DeviceKeyCard extends StatelessWidget {
       },
       tooltip: 'Copy device ID',
       style: IconButton.styleFrom(
-        backgroundColor: colorScheme.primary.withOpacity(0.1),
+        backgroundColor: colorScheme.primary.withValues(alpha: 0.1),
         foregroundColor: colorScheme.onPrimaryContainer,
       ),
     );

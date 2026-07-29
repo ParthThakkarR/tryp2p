@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
@@ -113,12 +113,12 @@ class _ReceivePageState extends State<ReceivePage>
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               color: _listening
-                                  ? Colors.green.withOpacity(0.1)
+                                  ? Colors.green.withValues(alpha: 0.1)
                                   : colorScheme.surfaceContainerHighest,
                               border: Border.all(
                                 color: _listening
                                     ? Colors.green
-                                    : colorScheme.outline.withOpacity(0.3),
+                                    : colorScheme.outline.withValues(alpha: 0.3),
                                 width: 3,
                               ),
                             ),
@@ -129,7 +129,7 @@ class _ReceivePageState extends State<ReceivePage>
                               size: 56,
                               color: _listening
                                   ? Colors.green
-                                  : colorScheme.onSurface.withOpacity(0.4),
+                                  : colorScheme.onSurface.withValues(alpha: 0.4),
                             ),
                           ),
                         );
@@ -149,7 +149,7 @@ class _ReceivePageState extends State<ReceivePage>
                           ? 'Share your Device Key with the sender'
                           : 'Tap Start to resume listening',
                       style: theme.textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.onSurface.withOpacity(0.6),
+                        color: colorScheme.onSurface.withValues(alpha: 0.6),
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -162,7 +162,7 @@ class _ReceivePageState extends State<ReceivePage>
                         padding: const EdgeInsets.symmetric(
                             horizontal: 16, vertical: 10),
                         decoration: BoxDecoration(
-                          color: colorScheme.primaryContainer.withOpacity(0.5),
+                          color: colorScheme.primaryContainer.withValues(alpha: 0.5),
                           borderRadius: BorderRadius.circular(30),
                         ),
                         child: Row(
@@ -273,12 +273,12 @@ class _ReceivePageState extends State<ReceivePage>
         child: Row(
           children: [
             Icon(icon, size: 18,
-                color: cs.onSurface.withOpacity(0.5)),
+                color: cs.onSurface.withValues(alpha: 0.5)),
             const SizedBox(width: 10),
             Text(
               label,
               style: theme.textTheme.bodySmall?.copyWith(
-                color: cs.onSurface.withOpacity(0.6),
+                color: cs.onSurface.withValues(alpha: 0.6),
               ),
             ),
             const Spacer(),

@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import '../main.dart';
 import 'widgets/device_key_card.dart';
 
@@ -181,7 +181,7 @@ class _ActionTile extends StatelessWidget {
                 Text(
                   subtitle,
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurface.withOpacity(0.6),
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                   ),
                 ),
               ],
@@ -218,7 +218,7 @@ class _StatusCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            Icon(Icons.wifi, size: 20, color: colorScheme.onSurface.withOpacity(0.6)),
+            Icon(Icons.wifi, size: 20, color: colorScheme.onSurface.withValues(alpha: 0.6)),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -229,7 +229,7 @@ class _StatusCard extends StatelessWidget {
             Text(
               'v0.1.0',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurface.withOpacity(0.4),
+                color: colorScheme.onSurface.withValues(alpha: 0.4),
               ),
             ),
           ],

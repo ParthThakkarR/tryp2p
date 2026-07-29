@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import '../main.dart';
 import 'peer_discovery_service.dart';
@@ -167,7 +167,7 @@ class _SendPageState extends State<SendPage> {
                               Text(
                                 _formatFileSize(_fileSize!),
                                 style: theme.textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurface.withOpacity(0.5),
+                                  color: colorScheme.onSurface.withValues(alpha: 0.5),
                                 ),
                               ),
                           ],
@@ -232,15 +232,15 @@ class _SendPageState extends State<SendPage> {
                     child: Column(
                       children: [
                         Icon(Icons.wifi_find, size: 40,
-                            color: colorScheme.onSurface.withOpacity(0.2)),
+                            color: colorScheme.onSurface.withValues(alpha: 0.2)),
                         const SizedBox(height: 8),
                         Text('No nearby devices found',
                             style: theme.textTheme.bodyMedium?.copyWith(
-                              color: colorScheme.onSurface.withOpacity(0.5),
+                              color: colorScheme.onSurface.withValues(alpha: 0.5),
                             )),
                         Text('Ensure both devices are on the same Wi-Fi network',
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurface.withOpacity(0.3),
+                              color: colorScheme.onSurface.withValues(alpha: 0.3),
                             )),
                       ],
                     ),
@@ -280,12 +280,12 @@ class _SendPageState extends State<SendPage> {
             Row(
               children: [
                 Icon(Icons.speed, size: 16,
-                    color: colorScheme.onSurface.withOpacity(0.4)),
+                    color: colorScheme.onSurface.withValues(alpha: 0.4)),
                 const SizedBox(width: 6),
                 Text(
                   'Compression: Level ${AppSettings.compressionLevel}',
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurface.withOpacity(0.5),
+                    color: colorScheme.onSurface.withValues(alpha: 0.5),
                   ),
                 ),
               ],
@@ -358,7 +358,7 @@ class _SendPageState extends State<SendPage> {
                             fontWeight: FontWeight.w600)),
                     Text(peer.fullAddress,
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurface.withOpacity(0.5),
+                          color: colorScheme.onSurface.withValues(alpha: 0.5),
                           fontFamily: 'monospace',
                         )),
                   ],
@@ -368,7 +368,7 @@ class _SendPageState extends State<SendPage> {
                 Icon(Icons.check_circle, color: colorScheme.primary, size: 22)
               else
                 Icon(Icons.chevron_right,
-                    color: colorScheme.onSurface.withOpacity(0.3)),
+                    color: colorScheme.onSurface.withValues(alpha: 0.3)),
             ],
           ),
         ),

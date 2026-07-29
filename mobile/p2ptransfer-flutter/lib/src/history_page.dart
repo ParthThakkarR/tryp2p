@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 class HistoryPage extends StatelessWidget {
   const HistoryPage({super.key});
@@ -22,13 +22,13 @@ class HistoryPage extends StatelessWidget {
                 width: 100,
                 height: 100,
                 decoration: BoxDecoration(
-                  color: colorScheme.primaryContainer.withOpacity(0.5),
+                  color: colorScheme.primaryContainer.withValues(alpha: 0.5),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   Icons.history_rounded,
                   size: 48,
-                  color: colorScheme.primary.withOpacity(0.6),
+                  color: colorScheme.primary.withValues(alpha: 0.6),
                 ),
               ),
               const SizedBox(height: 24),
@@ -43,7 +43,7 @@ class HistoryPage extends StatelessWidget {
                 'Your file transfer history will appear here.\nSend or receive files to get started.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurface.withOpacity(0.5),
+                  color: colorScheme.onSurface.withValues(alpha: 0.5),
                   height: 1.5,
                 ),
               ),

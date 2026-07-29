@@ -27,10 +27,13 @@ const FolderIcon = () => (
 /* ── Component ─────────────────────────────────────────── */
 export default function Receive() {
   const [deviceId,    setDeviceId]    = useState("");
+  const [shortId,     setShortId]     = useState("");
   const [deviceName,  setDeviceName]  = useState("");
   const [outputDir,   setOutputDir]   = useState("");
   const [isLoading,   setIsLoading]   = useState(true);
   const [copied,      setCopied]      = useState(false);
+  const [copiedFull,  setCopiedFull]  = useState(false);
+  const [showFullId,  setShowFullId]  = useState(false);
 
   const { activeReceiveProgress: activeProgress, receiveSpeed: speed, recentTransfers: recents, receiveError, savedOutputDir, setSavedOutputDir, isPaused, activeRequestId, pauseTransfer, resumeTransfer, cancelTransfer } = useTransfer();
 
@@ -62,10 +65,12 @@ export default function Receive() {
 
     Promise.all([
       invoke<string>("get_device_id"),
+      invoke<string>("get_short_device_id"),
       invoke<string>("get_device_name"),
       invoke<string>("get_default_download_dir"),
-    ]).then(([id, name, dir]) => {
+    ]).then(([id, shortId, name, dir]) => {
       setDeviceId(id);
+      setShortId(shortId);
       setDeviceName(name);
       // Only override if the user hasn't set a custom dir
       if (!savedOutputDir) {
@@ -96,9 +101,16 @@ export default function Receive() {
   };
 
   const copyDeviceId = () => {
-    navigator.clipboard.writeText(deviceId).then(() => {
+    navigator.clipboard.writeText(shortId || deviceId).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const copyFullId = () => {
+    navigator.clipboard.writeText(deviceId).then(() => {
+      setCopiedFull(true);
+      setTimeout(() => setCopiedFull(false), 2000);
     });
   };
 
@@ -122,27 +134,96 @@ export default function Receive() {
 
         {/* ── Device Identity ── */}
         <div className="panel mb-6">
-          <div className="panel-title-sm">Your Device ID</div>
+          <div className="panel-title-sm">Your Device Key</div>
           <p className="text-sm text-mist mb-3">
-            Share this ID with people you want to exchange files with. They add it as a contact in Settings — you do the same with theirs. <strong>Share once, send forever.</strong>
+            Share this key with the sender — they enter it in their Send page to reach you directly.
           </p>
 
-          <div className="ticket-display" style={{ fontSize: "var(--text-xs)" }}>
-            {isLoading ? "Loading…" : deviceId}
+          {/* Short key — prominent, compact */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+            background: "var(--bg-raised)",
+            border: "1px solid var(--border-signal)",
+            borderRadius: "var(--radius)",
+            padding: "12px 16px",
+            boxShadow: "0 0 18px var(--signal-glow)",
+          }}>
+            {/* Key icon */}
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--signal)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <circle cx="7.5" cy="15.5" r="5.5" />
+              <path d="M21 2l-9.6 9.6" />
+              <path d="M15.5 7.5l3 3L22 7l-3-3" />
+            </svg>
+
+            {/* Short ID */}
+            <span style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "1.25rem",
+              fontWeight: 700,
+              letterSpacing: "0.15em",
+              color: "var(--signal)",
+              flex: 1,
+            }}>
+              {isLoading ? "Loading…" : (shortId || deviceId.slice(0, 8).toUpperCase())}
+            </span>
+
+            {/* Copy short key button */}
             <button
               className={`ticket-copy-btn${copied ? " copied" : ""}`}
               onClick={copyDeviceId}
               disabled={isLoading}
+              style={{ position: "relative", top: "auto", right: "auto", flexShrink: 0 }}
             >
               {copied ? <><CheckIcon /> Copied</> : <><CopyIcon /> Copy</>}
             </button>
           </div>
 
+          {/* Online status row */}
           <div className="mt-3 flex items-center gap-3" style={{ padding: "var(--sp-2) var(--sp-3)", background: "var(--bg-raised)", borderRadius: "var(--r-md)", border: "1px solid var(--border)" }}>
             <div className="wan-serving-dot" />
             <span className="text-sm text-ink">
               Online as <strong>{deviceName || "…"}</strong> — reachable via QUIC (LAN direct · WAN via relay)
             </span>
+          </div>
+
+          {/* Full node ID — collapsed by default */}
+          <div style={{ marginTop: "10px" }}>
+            <button
+              onClick={() => setShowFullId(v => !v)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--mist)",
+                fontSize: "var(--text-xs)",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: 0,
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                style={{ transform: showFullId ? "rotate(90deg)" : "none", transition: "transform 0.2s" }}>
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+              {showFullId ? "Hide full node ID" : "Show full node ID"}
+            </button>
+
+            {showFullId && (
+              <div style={{ marginTop: "8px", position: "relative" }}>
+                <div className="ticket-display" style={{ fontSize: "var(--text-xs)", padding: "10px 44px 10px 12px", lineHeight: 1.5, color: "var(--mist)" }}>
+                  {deviceId}
+                  <button
+                    className={`ticket-copy-btn${copiedFull ? " copied" : ""}`}
+                    onClick={copyFullId}
+                  >
+                    {copiedFull ? <><CheckIcon /> Copied</> : <><CopyIcon /> Copy</>}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

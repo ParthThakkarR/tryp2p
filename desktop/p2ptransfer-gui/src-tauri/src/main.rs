@@ -747,6 +747,19 @@ async fn get_device_id(state: tauri::State<'_, AppState>) -> Result<String, Stri
     Ok(state.device_id.clone())
 }
 
+/// Returns a short 8-char hex device ID formatted as XXXX-XXXX.
+/// This is the user-facing "key" shown in the UI — same format as the mobile app.
+#[tauri::command]
+async fn get_short_device_id(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let full = &state.device_id;
+    let hex8: String = full.chars().take(8).collect::<String>().to_uppercase();
+    if hex8.len() == 8 {
+        Ok(format!("{}-{}", &hex8[..4], &hex8[4..]))
+    } else {
+        Ok(full.clone())
+    }
+}
+
 /// Returns the device display name.
 #[tauri::command]
 async fn get_device_name(state: tauri::State<'_, AppState>) -> Result<String, String> {
@@ -1493,6 +1506,7 @@ fn main() {
             stop_listening,
             get_default_download_dir,
             get_device_id,
+            get_short_device_id,
             get_device_name,
             add_contact,
             list_contacts,

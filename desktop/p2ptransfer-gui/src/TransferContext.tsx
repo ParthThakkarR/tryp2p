@@ -65,9 +65,12 @@ interface TransferContextValue {
   // Receive state
   activeReceiveProgress: ProgressState | null;
   receiveSpeed: number;
+  /** The request_id that the backend is actively receiving — use this for pause/cancel, not the URL query param */
+  activeReceiveRequestId: string | null;
   recentTransfers: RecentTransfer[];
   /** Error string for a receive-side error. */
   receiveError: string | null;
+  receiveComplete: boolean;
 
   // Persisted output dir (restored from localStorage on mount)
   savedOutputDir: string;
@@ -114,8 +117,10 @@ export function TransferProvider({ children }: { children: ReactNode }) {
   // ── Receive state ───────────────────────────────────────
   const [activeReceiveProgress, setActiveReceiveProgress] = useState<ProgressState | null>(null);
   const [receiveSpeed, setReceiveSpeed]                   = useState(0);
+  const [activeReceiveRequestId, setActiveReceiveRequestId] = useState<string | null>(null);
   const [recentTransfers, setRecentTransfers]             = useState<RecentTransfer[]>([]);
   const [receiveError, setReceiveError]                   = useState<string | null>(null);
+  const [receiveComplete, setReceiveComplete]             = useState(false);
 
   // ── Persisted output dir ─────────────────────────────────
   const [savedOutputDir, _setSavedOutputDir] = useState<string>(() =>
@@ -243,7 +248,9 @@ export function TransferProvider({ children }: { children: ReactNode }) {
 
       recvTotalBytes.current = event.payload.total;
       setActiveReceiveProgress({ sent: event.payload.bytes_transferred, total: event.payload.total });
+      setActiveReceiveRequestId(event.payload.request_id);
       setReceiveError(null); // clear any previous error once data starts flowing
+      // Keep legacy setActiveRequestId too for backwards compat
       setActiveRequestId(event.payload.request_id);
     });
 
@@ -260,6 +267,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       setActiveReceiveProgress(null);
       setReceiveSpeed(0);
       setReceiveError(null);
+      setReceiveComplete(true);
       setIsPaused(false);
     });
 
@@ -285,7 +293,9 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       // Also clear the receive side in case the receiver cancelled.
       setIsPaused(false);
       setActiveReceiveProgress(null);
+      setActiveReceiveRequestId(null);
       setReceiveSpeed(0);
+      setReceiveComplete(false);
       // Signal all overlay windows to close themselves.
       // NOTE: set wasCancelled AFTER resetSendState so the overlay's useEffect
       // sees the clean state before triggering appWindow.close().
@@ -328,8 +338,8 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       sendRejected,
       sendError, isPaused,
       wasCancelled, setWasCancelled,
-      activeReceiveProgress, receiveSpeed, recentTransfers,
-      receiveError,
+      activeReceiveProgress, receiveSpeed, activeReceiveRequestId, recentTransfers,
+      receiveError, receiveComplete,
       savedOutputDir, setSavedOutputDir,
       resetSendState, startSendTracking,
       pauseTransfer, resumeTransfer, cancelTransfer,

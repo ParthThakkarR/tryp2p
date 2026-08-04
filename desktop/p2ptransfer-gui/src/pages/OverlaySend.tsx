@@ -40,7 +40,13 @@ export default function OverlaySend() {
     wasCancelled,
     setWasCancelled,
     startSendTracking,
+    resetSendState,
   } = useTransfer();
+
+  // Reset any lingering send state when overlay opens
+  useEffect(() => {
+    resetSendState();
+  }, []);
 
   // Listen for additional files passed when user selects multiple files in Explorer
   useEffect(() => {
@@ -335,7 +341,7 @@ export default function OverlaySend() {
               </div>
             )}
 
-            {(isSending || sendComplete) && (
+            {(isSending || (sendComplete && !sendError && !localError && !sendRejected)) && (
               <div className="animate-slide-up" style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
                   <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'rgba(0,229,160,0.1)', border: '1px solid rgba(0,229,160,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -384,7 +390,7 @@ export default function OverlaySend() {
 
             {/* Bottom Action Area */}
             <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-              {!isSending && !sendComplete && !isAdding && (
+              {!isSending && !sendComplete && !isAdding && !sendError && !localError && !sendRejected && (
                 <button
                   className="btn btn-primary"
                   style={{ width: '100%', boxShadow: '0 4px 14px rgba(0,229,160,0.2)' }}
@@ -395,21 +401,31 @@ export default function OverlaySend() {
                 </button>
               )}
 
-              {sendComplete && (
+              {sendComplete && !sendError && !localError && !sendRejected && (
                 <button className="btn btn-ghost" style={{ width: '100%' }} onClick={closeWindow}>
                   Close Window
                 </button>
               )}
 
               {sendRejected && (
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--ember)', textAlign: 'center', padding: '0.5rem', background: 'rgba(255,90,60,0.1)', borderRadius: 'var(--r-md)', border: '1px solid rgba(255,90,60,0.2)' }}>
-                  The receiver rejected the transfer.
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--ember)', textAlign: 'center', padding: '0.5rem', background: 'rgba(255,90,60,0.1)', borderRadius: 'var(--r-md)', border: '1px solid rgba(255,90,60,0.2)' }}>
+                    The receiver rejected the transfer.
+                  </div>
+                  <button className="btn btn-ghost" style={{ width: '100%' }} onClick={closeWindow}>
+                    Close Window
+                  </button>
                 </div>
               )}
 
               {(sendError || localError) && !sendRejected && (
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--ember)', textAlign: 'center', padding: '0.5rem', background: 'rgba(255,90,60,0.1)', borderRadius: 'var(--r-md)', border: '1px solid rgba(255,90,60,0.2)', wordBreak: 'break-word' }}>
-                  {sendError || localError}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--ember)', textAlign: 'center', padding: '0.5rem', background: 'rgba(255,90,60,0.1)', borderRadius: 'var(--r-md)', border: '1px solid rgba(255,90,60,0.2)', wordBreak: 'break-word' }}>
+                    {sendError || localError}
+                  </div>
+                  <button className="btn btn-ghost" style={{ width: '100%' }} onClick={closeWindow}>
+                    Close Window
+                  </button>
                 </div>
               )}
             </div>

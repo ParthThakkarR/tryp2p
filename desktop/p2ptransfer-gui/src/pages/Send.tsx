@@ -272,7 +272,9 @@ export default function Send() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: c.online ? 'var(--signal)' : 'rgba(255,255,255,0.3)', boxShadow: c.online ? '0 0 6px rgba(0,229,160,0.5)' : 'none' }}></span>
                         {c.online ? "Online" : "Offline"}
-                        <span style={{ marginLeft: '4px' }}>({c.node_id.slice(0, 12)}…{c.node_id.slice(-6)})</span>
+                        <span style={{ marginLeft: '4px' }}>
+                          ({c.node_id.length === 8 ? `${c.node_id.slice(0, 4)}-${c.node_id.slice(4, 8)}` : c.node_id})
+                        </span>
                       </div>
                       {/* Only show actionable errors (e.g. "Peer address not found") */}
                       {c.online === false && c.online_error && (
@@ -292,7 +294,7 @@ export default function Send() {
             </div>
           ) : (
             <div className="alert alert-info">
-              No contacts yet. Add contacts in <strong>Settings → Contacts</strong> by sharing Device IDs.
+              No contacts yet. Add contacts in the <strong>Contacts</strong> tab by sharing Device IDs.
             </div>
           )}
 

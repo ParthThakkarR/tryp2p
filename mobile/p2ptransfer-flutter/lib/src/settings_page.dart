@@ -25,7 +25,8 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: AppSettings.deviceName);
-    _portController = TextEditingController(text: AppSettings.tcpPort.toString());
+    _portController =
+        TextEditingController(text: AppSettings.tcpPort.toString());
     _compressionLevel = AppSettings.compressionLevel.toDouble();
   }
 
@@ -115,7 +116,8 @@ class _SettingsPageState extends State<SettingsPage> {
                                 ),
                               ),
                               const SizedBox(width: 6),
-                              Icon(Icons.copy, size: 14,
+                              Icon(Icons.copy,
+                                  size: 14,
                                   color: colorScheme.onPrimaryContainer),
                             ],
                           ),
@@ -124,14 +126,15 @@ class _SettingsPageState extends State<SettingsPage> {
                     ],
                   ),
                   const SizedBox(height: 12),
-
                   InkWell(
                     onTap: () => setState(() => _showFullKey = !_showFullKey),
                     borderRadius: BorderRadius.circular(8),
                     child: Row(
                       children: [
-                        Icon(Icons.key, size: 14,
-                            color: colorScheme.onSurface.withValues(alpha: 0.4)),
+                        Icon(Icons.key,
+                            size: 14,
+                            color:
+                                colorScheme.onSurface.withValues(alpha: 0.4)),
                         const SizedBox(width: 6),
                         Text(
                           _showFullKey ? 'Hide full key' : 'Show full key',
@@ -140,9 +143,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                         ),
                         Icon(
-                          _showFullKey
-                              ? Icons.expand_less
-                              : Icons.expand_more,
+                          _showFullKey ? Icons.expand_less : Icons.expand_more,
                           size: 16,
                           color: colorScheme.primary,
                         ),
@@ -159,7 +160,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: SelectableText(
-                        deviceIdentity.fullKeyHex,
+                        deviceIdentity.rawShortId,
                         style: theme.textTheme.bodySmall?.copyWith(
                           fontFamily: 'monospace',
                           fontSize: 11,
@@ -270,10 +271,12 @@ class _SettingsPageState extends State<SettingsPage> {
                     children: [
                       Text('Level 1 (Fast)',
                           style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurface.withValues(alpha: 0.4))),
+                              color: colorScheme.onSurface
+                                  .withValues(alpha: 0.4))),
                       Text('Level 22 (Max)',
                           style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurface.withValues(alpha: 0.4))),
+                              color: colorScheme.onSurface
+                                  .withValues(alpha: 0.4))),
                     ],
                   ),
                 ],
@@ -315,8 +318,7 @@ class _SectionHeader extends StatelessWidget {
     final theme = Theme.of(context);
     return Row(
       children: [
-        Icon(icon, size: 18,
-            color: theme.colorScheme.primary),
+        Icon(icon, size: 18, color: theme.colorScheme.primary),
         const SizedBox(width: 8),
         Text(
           title,

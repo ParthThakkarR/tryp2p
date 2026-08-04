@@ -1,45 +1,80 @@
-import 'dart:math';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:p2ptransfer/src/rust/api.dart' as rust_api;
 
 /// Generates and manages a persistent device identity key for this device.
 ///
-/// On first launch, generates a 32-byte random seed and stores it in the app's
-/// documents directory. Derives a short human-readable device ID (8 characters,
-/// hex format with a dash) that is easy to share (e.g. "A3F8-K2D1").
+/// On first launch (or after migration), generates an 8-character uppercase hex string
+/// and stores it in the app's documents directory.
 class DeviceIdentityService {
-  static const int _seedLength = 32;
-
-  List<int>? _keySeed;
   String? _shortId;
-  String? _fullKeyHex;
 
   /// Whether the identity has been loaded/generated.
-  bool get isInitialized => _keySeed != null;
+  bool get isInitialized => _shortId != null;
 
-  /// Short 8-character device ID for sharing (e.g. "A3F8-K2D1").
-  String get deviceId => _shortId ?? '------';
-
-  /// Full 32-byte seed as 64-char hex string.
-  String get fullKeyHex => _fullKeyHex ?? '';
+  /// Short 8-character device ID for sharing, formatted as XXXX-XXXX.
+  String get deviceId {
+    if (_shortId == null) return '------';
+    if (_shortId!.length == 8) {
+      return '${_shortId!.substring(0, 4)}-${_shortId!.substring(4)}';
+    }
+    return _shortId!;
+  }
+  
+  /// The raw 8-character uppercase hex string.
+  String get rawShortId => _shortId ?? '';
 
   /// Initialize: load existing key or generate a new one.
   Future<void> initialize() async {
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/.p2p_device_key');
 
+    bool needsReset = false;
     if (await file.exists()) {
-      _keySeed = await file.readAsBytes();
-      if (_keySeed!.length != _seedLength) {
-        _keySeed = _generateSeed();
-        await file.writeAsBytes(_keySeed!);
+      try {
+        final content = await file.readAsString();
+        final trimmed = content.trim();
+
+        // Check if it's the old 64-char key, or invalid format
+        if (trimmed.length != 8 || !RegExp(r'^[0-9A-F]+$').hasMatch(trimmed)) {
+          needsReset = true;
+        } else {
+          _shortId = trimmed;
+        }
+      } catch (_) {
+        // File exists but contains binary/non-UTF-8 data (legacy key).
+        // Treat it as corrupt and regenerate.
+        needsReset = true;
       }
     } else {
-      _keySeed = _generateSeed();
-      await file.writeAsBytes(_keySeed!);
+      needsReset = true;
     }
 
-    _deriveIdentifiers();
+    if (needsReset) {
+      await _clearLegacyCache();
+      _shortId = rust_api.generateRandomShortId();
+      await file.writeAsString(_shortId!);
+    }
+  }
+  
+  Future<void> _clearLegacyCache() async {
+    // Clear old SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('p2p_contacts_v1');
+    
+    // Clear old identity file if exists
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/.p2p_device_key');
+    if (await file.exists()) {
+      await file.delete();
+    }
+    
+    // Note: SQLite resume DB on mobile is not yet fully implemented or we can just delete it if it was
+    final dbFile = File('${dir.path}/resume.db');
+    if (await dbFile.exists()) {
+      await dbFile.delete();
+    }
   }
 
   /// Regenerate the device key (old one is replaced).
@@ -47,9 +82,8 @@ class DeviceIdentityService {
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/.p2p_device_key');
 
-    _keySeed = _generateSeed();
-    await file.writeAsBytes(_keySeed!);
-    _deriveIdentifiers();
+    _shortId = rust_api.generateRandomShortId();
+    await file.writeAsString(_shortId!);
   }
 
   /// Delete the device key file (for testing/reset).
@@ -59,44 +93,6 @@ class DeviceIdentityService {
     if (await file.exists()) {
       await file.delete();
     }
-    _keySeed = null;
     _shortId = null;
-    _fullKeyHex = null;
-  }
-
-  /// Get the raw seed bytes.
-  List<int>? get rawSeed => _keySeed;
-
-  List<int> _generateSeed() {
-    final random = Random.secure();
-    return List<int>.generate(_seedLength, (_) => random.nextInt(256));
-  }
-
-  void _deriveIdentifiers() {
-    if (_keySeed == null) return;
-
-    // Full key: hex of all 32 bytes (uppercase for display/comparison)
-    _fullKeyHex = _keySeed!
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join()
-        .toUpperCase();
-
-    // Short ID: mix seed bytes with XOR + rotate to get a deterministic
-    // pseudo-hash, then take first 4 bytes as 8 hex chars.
-    final mixed = List<int>.generate(32, (i) {
-      int v = _keySeed![i];
-      v ^= _keySeed![(i + 3) % 32];
-      v ^= _keySeed![(i + 7) % 32];
-      v = ((v << 3) | (v >> 5)) & 0xFF;
-      v ^= 0x5A;
-      return v;
-    });
-
-    final shortBytes = mixed.take(4).toList();
-    final hex = shortBytes
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join()
-        .toUpperCase();
-    _shortId = '${hex.substring(0, 4)}-${hex.substring(4)}';
   }
 }

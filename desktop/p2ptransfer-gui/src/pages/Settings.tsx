@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
-import type { Config, ContactEntry } from "../types";
+import type { Config } from "../types";
 
 /* ── Constants ────────────────────────────────────────────── */
 const CHUNK_512KB = 512 * 1024;
@@ -143,20 +143,10 @@ export default function Settings() {
   const [saved,    setSaved]    = useState(false);
   const [loadErr,  setLoadErr]  = useState<string | null>(null);
 
-  // Contacts state
-  const [contacts,       setContacts]       = useState<ContactEntry[]>([]);
-  const [newContactName, setNewContactName] = useState("");
-  const [newContactId,   setNewContactId]   = useState("");
-  const [contactError,   setContactError]   = useState<string | null>(null);
-  const [contactSaved,   setContactSaved]   = useState(false);
-
   useEffect(() => {
     invoke<Config>("get_config")
       .then(cfg => { setConfig(cfg); setDirty(cfg); })
       .catch(() => setLoadErr("Couldn't load configuration. The backend may be unavailable."));
-    invoke<ContactEntry[]>("list_contacts")
-      .then(setContacts)
-      .catch(() => {});
   }, []);
 
   const get = (key: keyof Config): string => dirty[key] ?? config[key] ?? "";
@@ -236,123 +226,7 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* ── Contacts ── */}
-      <div className="settings-section">
-        <div className="settings-section-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
-            <circle cx="9" cy="7" r="4" />
-            <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
-          </svg>
-          Contacts
-        </div>
 
-        <p className="text-sm text-mist mb-4">
-          Add people by their Device ID — they share it once from their Receive page. After adding, you can send them files directly from the Send page.
-        </p>
-
-        {/* Add contact form */}
-        <div className="settings-grid mb-4">
-          <div className="form-group">
-            <label className="form-label" htmlFor="contact-name">Name</label>
-            <input
-              id="contact-name"
-              className="input-field"
-              type="text"
-              value={newContactName}
-              onChange={e => { setNewContactName(e.target.value); setContactError(null); setContactSaved(false); }}
-              placeholder="Alice"
-            />
-          </div>
-          <div className="form-group">
-            <label className="form-label" htmlFor="contact-id">Device ID</label>
-            <input
-              id="contact-id"
-              className="input-field mono"
-              type="text"
-              value={newContactId}
-              onChange={e => { setNewContactId(e.target.value); setContactError(null); setContactSaved(false); }}
-              placeholder="Paste their Device ID here"
-            />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3 mb-6">
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={async () => {
-              if (!newContactName.trim() || !newContactId.trim()) {
-                setContactError("Both name and Device ID are required.");
-                return;
-              }
-              try {
-                await invoke("add_contact", { name: newContactName.trim(), nodeId: newContactId.trim() });
-                const updated = await invoke<ContactEntry[]>("list_contacts");
-                setContacts(updated);
-                setNewContactName("");
-                setNewContactId("");
-                setContactError(null);
-                setContactSaved(true);
-                setTimeout(() => setContactSaved(false), 2000);
-              } catch (e: unknown) {
-                setContactError(typeof e === "string" ? e : "Failed to add contact.");
-              }
-            }}
-            id="add-contact-btn"
-          >
-            Add contact
-          </button>
-          {contactSaved && (
-            <span className="flex items-center gap-1 text-signal text-sm" style={{ fontWeight: 600 }}>
-              <CheckIcon /> Added
-            </span>
-          )}
-          {contactError && (
-            <span className="form-error">{contactError}</span>
-          )}
-        </div>
-
-        {/* Contact list */}
-        {contacts.length > 0 && (
-          <div className="flex-col gap-2">
-            {contacts.map(c => (
-              <div key={c.name} className="peer-item" style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", padding: "var(--sp-3)", background: "var(--bg-raised)", borderRadius: "var(--r-md)", border: "1px solid var(--border)" }}>
-                <div style={{ width: 32, height: 32, borderRadius: "50%", background: "var(--bg-panel)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
-                    <circle cx="12" cy="7" r="4" />
-                  </svg>
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: "var(--ink-bright)" }}>{c.name}</div>
-                  <div className="font-mono text-xs text-mist" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {c.node_id.slice(0, 16)}…{c.node_id.slice(-8)}
-                  </div>
-                </div>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  style={{ color: "var(--ember)" }}
-                  onClick={async () => {
-                    try {
-                      await invoke("remove_contact", { name: c.name });
-                      const updated = await invoke<ContactEntry[]>("list_contacts");
-                      setContacts(updated);
-                    } catch { /* silent */ }
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {contacts.length === 0 && (
-          <div className="alert alert-info">
-            No contacts yet. Ask someone for their Device ID (they can copy it from their Receive page) and add it above.
-          </div>
-        )}
-      </div>
 
       {/* ── Network ── */}
       <div className="settings-section">

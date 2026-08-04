@@ -22,8 +22,7 @@ class _ReceivePageState extends State<ReceivePage>
   String _localIp = '';
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
-
-  StreamSubscription<IncomingTransferRequest>? _incomingSub;
+  Timer? _activeTransfersTimer;
 
   @override
   void initState() {
@@ -39,34 +38,19 @@ class _ReceivePageState extends State<ReceivePage>
     );
 
     _updateListeningState();
-    _subscribeToIncoming();
+    _activeTransfersTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _updateListeningState() {
     setState(() => _listening = TransferService.instance.isListening);
   }
 
-  void _subscribeToIncoming() {
-    _incomingSub?.cancel();
-    _incomingSub =
-        TransferService.instance.incomingRequests.listen(_onIncomingRequest);
-  }
-
-  Future<void> _toggleListening() async {
-    if (_listening) {
-      await TransferService.instance.stopListening();
-    } else {
-      await TransferService.instance
-          .startListening(port: AppSettings.tcpPort);
-      _subscribeToIncoming();
-    }
-    _updateListeningState();
-  }
-
   @override
   void dispose() {
+    _activeTransfersTimer?.cancel();
     _pulseController.dispose();
-    _incomingSub?.cancel();
     super.dispose();
   }
 
@@ -87,31 +71,17 @@ class _ReceivePageState extends State<ReceivePage>
     } catch (_) {}
   }
 
-  // ── Incoming transfer request handler ────────────────────────────────────
-  Future<void> _onIncomingRequest(IncomingTransferRequest req) async {
-    if (!mounted) {
-      req.decline();
-      return;
-    }
-    // Show accept/decline bottom sheet
-    await showModalBottomSheet<void>(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => _IncomingSheet(request: req),
-    );
-  }
 
   // ── Build ─────────────────────────────────────────────────────────────────
+  
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final port = AppSettings.tcpPort;
+    final activeTransfers = TransferService.instance.activeReceiveTransfers
+        .where((t) => !t.isDone && !t.isError)
+        .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -131,10 +101,24 @@ class _ReceivePageState extends State<ReceivePage>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── Active Transfers (if receiving files) ──────────────────────
+            if (activeTransfers.isNotEmpty) ...[
+              Text(
+                'Active Transfers',
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              for (final transfer in activeTransfers)
+                _ActiveReceiveTransferCard(transfer: transfer),
+              const SizedBox(height: 24),
+            ],
+
             // ── Device Key ────────────────────────────────────────────────
+
             DeviceKeyCard(
               deviceId: deviceIdentity.deviceId,
-              fullKeyHex: deviceIdentity.fullKeyHex,
+              
               compact: true,
             ),
             const SizedBox(height: 24),
@@ -234,21 +218,20 @@ class _ReceivePageState extends State<ReceivePage>
                     ],
 
                     const SizedBox(height: 20),
-                    SizedBox(
+                    Container(
                       width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _toggleListening,
-                        icon: Icon(
-                            _listening ? Icons.pause : Icons.play_arrow),
-                        label: Text(
-                          _listening ? 'Pause Listening' : 'Start Listening',
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor:
-                              _listening ? Colors.orange : Colors.green,
-                          foregroundColor: Colors.white,
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Center(
+                        child: Text(
+                          'Background listening active',
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
@@ -292,6 +275,7 @@ class _ReceivePageState extends State<ReceivePage>
                         );
                       },
                     ),
+                    // Removed legacy TCP button since we're always listening
                   ],
                 ),
               ),
@@ -342,24 +326,160 @@ class _ReceivePageState extends State<ReceivePage>
   }
 }
 
-// ── Accept / Decline bottom sheet ─────────────────────────────────────────────
-class _IncomingSheet extends StatefulWidget {
-  final IncomingTransferRequest request;
-  const _IncomingSheet({required this.request});
+// ── Active Transfer Card (shown on ReceivePage while downloading) ─────────────
+class _ActiveReceiveTransferCard extends StatefulWidget {
+  final TransferProgress transfer;
+  const _ActiveReceiveTransferCard({required this.transfer});
 
   @override
-  State<_IncomingSheet> createState() => _IncomingSheetState();
+  State<_ActiveReceiveTransferCard> createState() => _ActiveReceiveTransferCardState();
 }
 
-class _IncomingSheetState extends State<_IncomingSheet> {
+class _ActiveReceiveTransferCardState extends State<_ActiveReceiveTransferCard> {
+  bool _isPaused = false;
+
+  Future<void> _togglePause() async {
+    final reqId = widget.transfer.sessionId;
+    if (_isPaused) {
+      await TransferService.instance.resumeTransfer(reqId);
+      setState(() => _isPaused = false);
+    } else {
+      await TransferService.instance.pauseTransfer(reqId);
+      setState(() => _isPaused = true);
+    }
+  }
+
+  Future<void> _cancel() async {
+    await TransferService.instance.cancelTransfer(widget.transfer.sessionId);
+  }
+
+  String _formatSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final t = widget.transfer;
+    final pct = (t.fraction * 100).toInt();
+
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: cs.primary.withValues(alpha: 0.3), width: 1.2),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.downloading_rounded, color: cs.primary, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        t.fileName,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        '${_formatSize(t.bytesTransferred)} / ${_formatSize(t.totalBytes)}  •  ${t.speedLabel}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurface.withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  '$pct%',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: cs.primary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(
+              value: t.fraction > 0 ? t.fraction : null,
+              minHeight: 6,
+              borderRadius: BorderRadius.circular(3),
+              color: _isPaused ? Colors.orange : cs.primary,
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _togglePause,
+                  icon: Icon(_isPaused ? Icons.play_arrow : Icons.pause, size: 16),
+                  label: Text(_isPaused ? 'Resume' : 'Pause'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _cancel,
+                  icon: const Icon(Icons.close, size: 16),
+                  label: const Text('Cancel'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: cs.error,
+                    side: BorderSide(color: cs.error.withValues(alpha: 0.4)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Accept / Decline bottom sheet ─────────────────────────────────────────────
+class IncomingSheet extends StatefulWidget {
+  final IncomingTransferRequest request;
+  const IncomingSheet({super.key, required this.request});
+
+  @override
+  State<IncomingSheet> createState() => _IncomingSheetState();
+}
+
+class _IncomingSheetState extends State<IncomingSheet> {
   String? _savePath;
   bool _transferring = false;
   double _progress = 0;
   String _statusLabel = '';
-  // ignore: prefer_final_fields
   bool _done = false;
-  // ignore: prefer_final_fields
   bool _error = false;
+  bool _isPaused = false;
   StreamSubscription<TransferProgress>? _progressSub;
 
   @override
@@ -396,34 +516,57 @@ class _IncomingSheetState extends State<_IncomingSheet> {
 
   void _accept() {
     if (_savePath == null) return;
-    final fullPath = '$_savePath/${widget.request.fileName}';
-    widget.request.accept(fullPath);
+    widget.request.accept(_savePath!);
     setState(() {
       _transferring = true;
       _statusLabel = 'Starting…';
     });
-    // We just told the service where to save; progress comes from the background
-    // The service will call back into the socket; we can watch by polling or
-    // subscribing to a per-session progress stream (added later).
-    // For now poll state from TransferService
     _watchProgress();
   }
 
   void _watchProgress() {
-    // Poll every 100ms — basic but reliable for now
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (!mounted) return false;
-      // TODO: replace with a real progress stream from TransferService
-      // For now just animate for demo until service pushes progress
+    _listenToBackendEvents(widget.request.sessionId);
+  }
+
+  void _listenToBackendEvents(String sessionId) {
+    // The global backend event stream is already consumed by TransferService.
+    // We register a secondary listener for the incoming progress here.
+    // TransferService exposes the raw FrbTransferEvent stream for receive progress.
+    _progressSub = Stream.periodic(const Duration(milliseconds: 200))
+        .asyncMap((_) async => TransferService.instance.getActiveTransferProgress(sessionId))
+        .where((p) => p != null)
+        .cast<TransferProgress>()
+        .listen((p) {
+      if (!mounted) return;
       setState(() {
-        if (_progress < 0.98) {
-          _progress += 0.05;
-          _statusLabel = '${(_progress * 100).toInt()}%';
+        _progress = p.fraction;
+        if (p.isDone) {
+          _done = true;
+          _statusLabel = 'Complete ✓';
+        } else if (p.isError) {
+          _error = true;
+          _statusLabel = 'Error: ${p.errorMessage}';
+        } else {
+          _statusLabel = '${(_progress * 100).toInt()}%  •  ${p.speedLabel}';
         }
       });
-      return _progress < 0.98 && !_done && !_error;
     });
+  }
+
+  Future<void> _cancelReceive() async {
+    await TransferService.instance.cancelTransfer(widget.request.sessionId);
+    if (mounted) Navigator.pop(context);
+  }
+
+  Future<void> _togglePause() async {
+    final reqId = widget.request.sessionId;
+    if (_isPaused) {
+      await TransferService.instance.resumeTransfer(reqId);
+      setState(() => _isPaused = false);
+    } else {
+      await TransferService.instance.pauseTransfer(reqId);
+      setState(() => _isPaused = true);
+    }
   }
 
   void _decline() {
@@ -591,36 +734,78 @@ class _IncomingSheetState extends State<_IncomingSheet> {
           // Progress
           if (_transferring) ...[
             const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: _progress > 0 ? _progress : null,
+              minHeight: 8,
+              borderRadius: BorderRadius.circular(4),
+              color: _done
+                  ? Colors.green
+                  : _error
+                      ? cs.error
+                      : _isPaused
+                          ? Colors.orange
+                          : null,
+            ),
+            const SizedBox(height: 8),
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Expanded(
-                  child: LinearProgressIndicator(
-                    value: _progress > 0 ? _progress : null,
-                    minHeight: 8,
-                    borderRadius: BorderRadius.circular(4),
+                  child: Text(
+                    _done
+                        ? '✓ Saved to ${_savePath ?? ""}/${req.fileName}'
+                        : _error
+                            ? '✗ Transfer failed'
+                            : _isPaused
+                                ? '⏸ Paused'
+                                : 'Receiving — do not close…',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: _done
+                          ? Colors.green
+                          : _error
+                              ? cs.error
+                              : _isPaused
+                                  ? Colors.orange
+                                  : cs.onSurface.withValues(alpha: 0.6),
+                    ),
                   ),
                 ),
-                const SizedBox(width: 12),
                 Text(_statusLabel,
                     style: theme.textTheme.bodySmall
                         ?.copyWith(fontWeight: FontWeight.w600)),
               ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              _done
-                  ? '✓ Saved to ${_savePath ?? ""}/${req.fileName}'
-                  : _error
-                      ? '✗ Transfer failed'
-                      : 'Receiving — do not close this screen…',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: _done
-                    ? Colors.green
-                    : _error
-                        ? cs.error
-                        : cs.onSurface.withValues(alpha: 0.6),
+            if (!_done && !_error) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _togglePause,
+                      icon: Icon(_isPaused ? Icons.play_arrow : Icons.pause, size: 18),
+                      label: Text(_isPaused ? 'Resume' : 'Pause'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _isPaused ? cs.primary : cs.onSurface.withValues(alpha: 0.7),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _cancelReceive,
+                      icon: const Icon(Icons.close, size: 18),
+                      label: const Text('Cancel'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: cs.error,
+                        side: BorderSide(color: cs.error.withValues(alpha: 0.4)),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ),
+            ],
             if (_done) ...[
               const SizedBox(height: 16),
               SizedBox(
@@ -632,6 +817,7 @@ class _IncomingSheetState extends State<_IncomingSheet> {
               ),
             ],
           ],
+
           const SizedBox(height: 8),
         ],
       ),

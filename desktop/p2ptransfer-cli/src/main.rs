@@ -520,7 +520,7 @@ async fn cmd_send(
     info!("Key exchange complete");
 
     let engine = Arc::new(TransferEngine::new(4));
-    let mut metadata = engine.create_metadata(&path, chunk_size).await?;
+    let mut metadata = engine.create_metadata(&path, chunk_size, false).await?;
     metadata.nonce_prefix = nonce_prefix;
 
     println!(

@@ -27,30 +27,28 @@ const FolderIcon = () => (
 /* ── Component ─────────────────────────────────────────── */
 export default function Receive() {
   const [deviceId,    setDeviceId]    = useState("");
-  const [shortId,     setShortId]     = useState("");
   const [deviceName,  setDeviceName]  = useState("");
   const [outputDir,   setOutputDir]   = useState("");
   const [isLoading,   setIsLoading]   = useState(true);
   const [copied,      setCopied]      = useState(false);
-  const [copiedFull,  setCopiedFull]  = useState(false);
-  const [showFullId,  setShowFullId]  = useState(false);
 
-  const { activeReceiveProgress: activeProgress, receiveSpeed: speed, recentTransfers: recents, receiveError, savedOutputDir, setSavedOutputDir, isPaused, activeRequestId, pauseTransfer, resumeTransfer, cancelTransfer } = useTransfer();
+  const { activeReceiveProgress: activeProgress, receiveSpeed: speed, recentTransfers: recents, receiveError, savedOutputDir, setSavedOutputDir, isPaused, activeRequestId, activeReceiveRequestId, pauseTransfer, resumeTransfer, cancelTransfer } = useTransfer();
+
+  const targetId = activeReceiveRequestId || activeRequestId;
 
   const togglePause = async () => {
-    // If activeRequestId is available (set by Context tracking)
-    if (activeRequestId) {
+    if (targetId) {
       if (isPaused) {
-        await resumeTransfer(activeRequestId);
+        await resumeTransfer(targetId);
       } else {
-        await pauseTransfer(activeRequestId);
+        await pauseTransfer(targetId);
       }
     }
   };
 
   const doCancel = async () => {
-    if (activeRequestId) {
-      await cancelTransfer(activeRequestId);
+    if (targetId) {
+      await cancelTransfer(targetId);
     }
   };
 
@@ -68,9 +66,8 @@ export default function Receive() {
       invoke<string>("get_short_device_id"),
       invoke<string>("get_device_name"),
       invoke<string>("get_default_download_dir"),
-    ]).then(([id, shortId, name, dir]) => {
+    ]).then(([id, , name, dir]) => {
       setDeviceId(id);
-      setShortId(shortId);
       setDeviceName(name);
       // Only override if the user hasn't set a custom dir
       if (!savedOutputDir) {
@@ -101,16 +98,9 @@ export default function Receive() {
   };
 
   const copyDeviceId = () => {
-    navigator.clipboard.writeText(shortId || deviceId).then(() => {
+    navigator.clipboard.writeText(deviceId.replace(/-/g, "")).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
-  const copyFullId = () => {
-    navigator.clipboard.writeText(deviceId).then(() => {
-      setCopiedFull(true);
-      setTimeout(() => setCopiedFull(false), 2000);
     });
   };
 
@@ -166,7 +156,7 @@ export default function Receive() {
               color: "var(--signal)",
               flex: 1,
             }}>
-              {isLoading ? "Loading…" : (shortId || deviceId.slice(0, 8).toUpperCase())}
+              {isLoading ? "Loading…" : deviceId}
             </span>
 
             {/* Copy short key button */}
@@ -188,43 +178,6 @@ export default function Receive() {
             </span>
           </div>
 
-          {/* Full node ID — collapsed by default */}
-          <div style={{ marginTop: "10px" }}>
-            <button
-              onClick={() => setShowFullId(v => !v)}
-              style={{
-                background: "none",
-                border: "none",
-                color: "var(--mist)",
-                fontSize: "var(--text-xs)",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
-                padding: 0,
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                style={{ transform: showFullId ? "rotate(90deg)" : "none", transition: "transform 0.2s" }}>
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-              {showFullId ? "Hide full node ID" : "Show full node ID"}
-            </button>
-
-            {showFullId && (
-              <div style={{ marginTop: "8px", position: "relative" }}>
-                <div className="ticket-display" style={{ fontSize: "var(--text-xs)", padding: "10px 44px 10px 12px", lineHeight: 1.5, color: "var(--mist)" }}>
-                  {deviceId}
-                  <button
-                    className={`ticket-copy-btn${copiedFull ? " copied" : ""}`}
-                    onClick={copyFullId}
-                  >
-                    {copiedFull ? <><CheckIcon /> Copied</> : <><CopyIcon /> Copy</>}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
 
         {/* ── Output directory ── */}

@@ -138,11 +138,12 @@ async fn list_transfers(state: tauri::State<'_, AppState>) -> Result<Vec<Transfe
 
 #[tauri::command]
 fn pause_transfer(request_id: String, app_handle: tauri::AppHandle, state: tauri::State<'_, AppState>) {
-    let flag = protocol::TRANSFER_PAUSE_FLAGS
-        .entry(request_id.clone())
-        .or_insert_with(protocol::PauseFlag::new)
-        .clone();
-    flag.pause();
+    // IMPORTANT: Only signal a flag that already exists — the transfer loop
+    // pre-registers its own flag before streaming starts.  Creating a new flag
+    // here would result in a "dead" flag that the loop never checks.
+    if let Some(flag) = protocol::TRANSFER_PAUSE_FLAGS.get(&request_id) {
+        flag.pause();
+    }
 
     if let Some(mut t_state) = protocol::ACTIVE_TRANSFERS.get_mut(&request_id) {
         t_state.status = "paused".to_string();
@@ -322,7 +323,7 @@ async fn send_file(
 
     let engine = TransferEngine::new(4);
     let mut metadata = engine
-        .create_metadata(&file_path, 16 * 1024 * 1024)
+        .create_metadata(&file_path, 16 * 1024 * 1024, false)
         .await
         .map_err(|e| e.to_string())?;
     metadata.nonce_prefix = nonce_prefix;
@@ -423,6 +424,8 @@ async fn start_listening(
     *state.listener_handle.write().await = Some(handle);
     Ok("Listening on port 9877".into())
 }
+
+const CHANNEL_CAPACITY: usize = 32;
 
 async fn handle_incoming(
     mut stream: tokio::net::TcpStream,
@@ -543,7 +546,7 @@ async fn handle_incoming(
     // By combining decrypt + disk write in one blocking task, the async loop
     // is free to read the next network message while decryption runs.
     // Channel carries: (block_index, encrypted_payload_from_byte_6_onward)
-    let (disk_tx, mut disk_rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>)>(32);
+    let (disk_tx, mut disk_rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>)>(CHANNEL_CAPACITY);
     let output_path_writer = output_path.clone();
     let enc_key_writer = enc_key;
     let nonce_prefix_writer = nonce_prefix;
@@ -588,9 +591,22 @@ async fn handle_incoming(
         bytes_transferred: resume_offset,
     });
 
+    // Register pause/cancel flag so pause_transfer / cancel_transfer commands work
+    // on this TCP-received session (previously these were unregistered, making
+    // pause/cancel completely non-functional on the LAN receiver path).
+    let pause_flag = protocol::PauseFlag::new();
+    protocol::TRANSFER_PAUSE_FLAGS.insert(req_id.clone(), pause_flag.clone());
+
     // Async loop: reads framed messages and dispatches encrypted payloads.
     // Decryption happens in the blocking writer task above — zero CPU stalls here.
+    let mut was_cancelled = false;
+    let recv_loop_result: Result<(), String> = async {
     loop {
+        // Check pause/cancel BEFORE reading next chunk (honors pause from either device)
+        if pause_flag.wait_if_paused().await {
+            return Err("cancelled".to_string());
+        }
+
         let msg_data = tcp::receive_message(&mut stream).await.map_err(|e| {
             protocol::ACTIVE_TRANSFERS.remove(&req_id);
             format!("Network read error from {addr}: {e}")
@@ -656,6 +672,9 @@ async fn handle_incoming(
             0x04 => {
                 protocol::ACTIVE_TRANSFERS.remove(&req_id);
                 let err = String::from_utf8_lossy(&msg_data[1..]).to_string();
+                if err.contains("cancelled") || err.contains("Cancelled") {
+                    return Err("cancelled".to_string());
+                }
                 return Err(format!("Sender error: {err}"));
             }
             tag => {
@@ -665,15 +684,42 @@ async fn handle_incoming(
             }
         }
     }
+    Ok(())
+    }.await;
 
-    // Drop disk_tx to signal completion to writer task
+    // Drop disk_tx to signal completion to writer task (whether success, error, or cancel)
     drop(disk_tx);
+    // Clean up the pause/cancel flag
+    protocol::TRANSFER_PAUSE_FLAGS.remove(&req_id);
+
+    if let Err(ref e) = recv_loop_result {
+        if e == "cancelled" || e.contains("cancelled") || e.contains("Cancelled") {
+            was_cancelled = true;
+            protocol::ACTIVE_TRANSFERS.remove(&req_id);
+            let _ = app_handle.emit_all("transfer-cancelled", ());
+        } else {
+            let _ = writer_task.await;
+            let _ = std::fs::remove_file(&output_path);
+            protocol::ACTIVE_TRANSFERS.remove(&req_id);
+            return Err(recv_loop_result.unwrap_err());
+        }
+    }
+
+    if was_cancelled {
+        let mut err_frame = vec![0x04u8];
+        err_frame.extend_from_slice(b"Transfer cancelled by user");
+        let _ = tcp::send_message(&mut stream, &err_frame).await;
+        let _ = writer_task.await;
+        let _ = std::fs::remove_file(&output_path);
+        return Err("Transfer cancelled by user".to_string());
+    }
 
     // Wait for writer task to finish flushing to disk
     match writer_task.await {
         Ok(Ok(_)) => {},
         _ => {
             protocol::ACTIVE_TRANSFERS.remove(&req_id);
+            let _ = std::fs::remove_file(&output_path);
             return Err("Disk flush failed".into());
         }
     }
@@ -684,6 +730,7 @@ async fn handle_incoming(
         .await
         .map_err(|e| {
             protocol::ACTIVE_TRANSFERS.remove(&req_id);
+            let _ = std::fs::remove_file(&output_path);
             e.to_string()
         })?;
 
@@ -710,6 +757,7 @@ async fn handle_incoming(
         eprintln!("Transfer complete from {addr}: {} ({block_index} blocks)", metadata.file_name);
     } else {
         protocol::ACTIVE_TRANSFERS.remove(&req_id);
+        let _ = std::fs::remove_file(&output_path);
         let err_msg = format!("Checksum mismatch for {} from {addr}", metadata.file_name);
         eprintln!("{err_msg}");
         let mut error_resp = vec![0x04u8];
@@ -744,19 +792,23 @@ async fn stop_listening(state: tauri::State<'_, AppState>) -> Result<(), String>
 /// Returns this device's permanent ID (iroh NodeId).
 #[tauri::command]
 async fn get_device_id(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    Ok(state.device_id.clone())
+    let id = state.device_id.to_uppercase();
+    if id.len() == 8 {
+        Ok(format!("{}-{}", &id[0..4], &id[4..8]))
+    } else {
+        Ok(id)
+    }
 }
 
 /// Returns a short 8-char hex device ID formatted as XXXX-XXXX.
 /// This is the user-facing "key" shown in the UI — same format as the mobile app.
 #[tauri::command]
 async fn get_short_device_id(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let full = &state.device_id;
-    let hex8: String = full.chars().take(8).collect::<String>().to_uppercase();
-    if hex8.len() == 8 {
-        Ok(format!("{}-{}", &hex8[..4], &hex8[4..]))
+    let id = state.device_id.to_uppercase();
+    if id.len() == 8 {
+        Ok(format!("{}-{}", &id[0..4], &id[4..8]))
     } else {
-        Ok(full.clone())
+        Ok(id)
     }
 }
 
@@ -766,7 +818,11 @@ async fn get_device_name(state: tauri::State<'_, AppState>) -> Result<String, St
     Ok(state.device_name.clone())
 }
 
-/* â”€â”€ Contact management commands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+fn normalize_node_id(id: &str) -> String {
+    id.replace("-", "").trim().to_uppercase()
+}
+
+/* ── Contact management commands ────────────────────────────────────── */
 
 #[tauri::command]
 async fn add_contact(
@@ -777,18 +833,28 @@ async fn add_contact(
     let mut ip = String::new();
     let mut port: u16 = 0;
     
-    // Attempt to resolve IP using LAN discovery by matching device name
+    // Normalize user input to uppercase hex
+    let final_node_id = normalize_node_id(&node_id);
+    if final_node_id.len() != 8 || !final_node_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Device ID must be exactly 8 hex characters.".into());
+    }
+    
+    // Attempt to resolve IP & full node ID using LAN discovery
     let discovery_lock = state.discovery.read().await;
     if let Some(discovery) = discovery_lock.as_ref() {
         let peers = discovery.get_peers().await;
-        if let Some(peer) = peers.iter().find(|p| p.device_name == name) {
+        if let Some(peer) = peers.iter().find(|p| {
+            p.device_name.eq_ignore_ascii_case(&name) ||
+            p.node_id.as_ref().map_or(false, |id| normalize_node_id(id) == final_node_id)
+        }) {
             ip = peer.socket_addr.ip().to_string();
             port = peer.socket_addr.port();
         }
     }
     drop(discovery_lock);
 
-    if let Ok(pk) = node_id.parse::<iroh::PublicKey>() {
+    // Only try Iroh pre-connect if we have a valid 52/64 char full ID
+    if let Ok(pk) = final_node_id.parse::<iroh::PublicKey>() {
         let mut target_node = iroh::EndpointAddr::new(pk);
         if !ip.is_empty() && port > 0 {
             let addr_str = format!("{}:{}", ip, port);
@@ -798,19 +864,21 @@ async fn add_contact(
         }
         
         if let Some(endpoint) = state.iroh_endpoint.get().cloned() {
-            // Pre-connect to cache the address in iroh. 4s to allow relay discovery + NAT traversal.
             if let Ok(Ok(_conn)) = tokio::time::timeout(
                 std::time::Duration::from_millis(4000),
                 endpoint.connect(target_node, protocol::ALPN)
             ).await {
-                // Connection successful! Address will be cached by Iroh.
+                // Pre-connection successful
             }
         }
+    } else if final_node_id.len() == 8 {
+        // If we still only have 8 characters and it didn't parse, we can still save it for LAN-only TCP fallback,
+        // but WAN won't work until we discover the full key.
     }
     
     state
         .resume_manager
-        .upsert_contact(&name, &node_id, &ip, port)
+        .upsert_contact(&name, &final_node_id, &ip, port)
         .map_err(|e| e.to_string())
 }
 
@@ -841,8 +909,10 @@ async fn list_contacts(state: tauri::State<'_, AppState>) -> Result<Vec<ContactE
         let mut port = c.last_known_port;
         let resume_mgr = state.resume_manager.clone();
 
+        let norm_node_id = normalize_node_id(&node_id_str);
         let found_lan_peer = lan_peers.iter().find(|p| {
-            p.device_name == name || (p.node_id.is_some() && p.node_id.as_ref() == Some(&node_id_str))
+            p.device_name.eq_ignore_ascii_case(&name) ||
+            p.node_id.as_ref().map_or(false, |id| normalize_node_id(id) == norm_node_id)
         });
         let is_on_lan = found_lan_peer.is_some();
         if let Some(peer) = found_lan_peer {
@@ -858,7 +928,8 @@ async fn list_contacts(state: tauri::State<'_, AppState>) -> Result<Vec<ContactE
             if is_on_lan {
                 online = true;
             } else if let Some(ep) = ep_opt {
-                if let Ok(node_id) = node_id_str.parse::<iroh::PublicKey>() {
+                if let Ok(secret) = p2ptransfer_core::crypto::identity::derive_secret_key_from_short_id(&node_id_str) {
+                    let node_id = secret.public();
                     let mut target_node = iroh::EndpointAddr::new(node_id);
                     if !ip.is_empty() && port > 0 {
                         let addr_str = format!("{}:{}", ip, port);
@@ -915,28 +986,22 @@ async fn remove_contact(
         .map_err(|e| e.to_string())
 }
 
-/* â”€â”€ Identity-based transfer commands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Identity-based transfer commands ────────────────────────────────────── */
 
 fn is_same_lan(peer_ip: &str) -> bool {
-    // Part 14: Direct connection > relay
-    if let Ok(ip) = local_ip_address::local_ip() {
-        let local = ip.to_string();
-        match (peer_ip, local.as_str()) {
-            (p, l) if p.starts_with("192.168.") && l.starts_with("192.168.") => true,
-            (p, l) if p.starts_with("10.") && l.starts_with("10.") => true,
-            (p, l) if p.starts_with("172.") && l.starts_with("172.") => {
-                let p_ip = p.parse::<std::net::IpAddr>();
-                let l_ip = l.parse::<std::net::IpAddr>();
-                if let (Ok(std::net::IpAddr::V4(p4)), Ok(std::net::IpAddr::V4(l4))) = (p_ip, l_ip) {
-                    p4.octets()[1] >= 16 && p4.octets()[1] <= 31 &&
-                    l4.octets()[1] >= 16 && l4.octets()[1] <= 31
-                } else {
-                    false
-                }
-            },
-            _ => false
+    if peer_ip.is_empty() {
+        return false;
+    }
+    if let Ok(ip) = peer_ip.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_private() || v4.is_loopback() || v4.is_link_local()
+            }
+            std::net::IpAddr::V6(v6) => v6.is_loopback(),
         }
-    } else { false }
+    } else {
+        false
+    }
 }
 
 /// Struct holding the path of a temp archive for directory sending.
@@ -1028,13 +1093,28 @@ async fn send_to_contact(
             break Err("REJECTED".to_string());
         }
 
-        // Fetch latest contact info (in case LAN discovery refreshed IP/port)
-        let current_contact = state
+        // Fetch latest contact info and query live LAN discovery
+        let mut current_contact = state
             .resume_manager
             .get_contact(&contact_name)
             .ok()
             .flatten()
             .unwrap_or_else(|| contact.clone());
+
+        let norm_peer_id = normalize_node_id(&current_contact.peer_id);
+        let discovery_guard = state.discovery.read().await;
+        if let Some(d) = discovery_guard.as_ref() {
+            let peers = d.get_peers().await;
+            if let Some(p) = peers.iter().find(|p| {
+                p.device_name.eq_ignore_ascii_case(&contact_name) ||
+                p.node_id.as_ref().map_or(false, |id| normalize_node_id(id) == norm_peer_id)
+            }) {
+                current_contact.last_known_ip = p.socket_addr.ip().to_string();
+                current_contact.last_known_port = p.socket_addr.port();
+                let _ = state.resume_manager.upsert_contact(&contact_name, &current_contact.peer_id, &current_contact.last_known_ip, current_contact.last_known_port);
+            }
+        }
+        drop(discovery_guard);
 
         // 1. Attempt direct TCP if on LAN
         if is_same_lan(&current_contact.last_known_ip) {
@@ -1057,7 +1137,8 @@ async fn send_to_contact(
 
         // 2. Attempt Iroh QUIC if endpoint ready
         if let Some(endpoint) = state.iroh_endpoint.get().cloned() {
-            if let Ok(node_id) = current_contact.peer_id.parse::<iroh::PublicKey>() {
+            if let Ok(secret) = p2ptransfer_core::crypto::identity::derive_secret_key_from_short_id(&current_contact.peer_id) {
+                let node_id = secret.public();
                 let mut target_node = iroh::EndpointAddr::new(node_id);
                 if !current_contact.last_known_ip.is_empty() && current_contact.last_known_port > 0 {
                     if let Ok(sa) = format!("{}:{}", current_contact.last_known_ip, current_contact.last_known_port).parse::<std::net::SocketAddr>() {
@@ -1291,8 +1372,9 @@ fn main() {
     );
 
     // Load persistent identity
-    let secret_key = identity::load_or_create_identity(&data_dir)
+    let (short_id, secret_key) = identity::load_or_create_identity(&data_dir)
         .expect("Failed to load or create identity");
+    let short_id_for_setup = short_id.clone();
     let device_name = hostname::get()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_else(|_| "Unknown".to_string());
@@ -1385,7 +1467,7 @@ fn main() {
             let rm = resume_manager.clone();
 
             // Spawn the iroh endpoint binding in the background so we don't block Tauri setup
-            let device_id = sk.public().to_string();
+            let device_id = short_id_for_setup.clone();
             let iroh_endpoint = Arc::new(tokio::sync::OnceCell::new());
             let iroh_router = Arc::new(RwLock::new(None));
 
@@ -1608,7 +1690,7 @@ async fn send_file_direct_tcp(
     let path_buf = std::path::PathBuf::from(&path);
     let engine = std::sync::Arc::new(TransferEngine::new(4));
     let mut metadata = engine
-        .create_metadata(&path_buf, LAN_BLOCK_SIZE)
+        .create_metadata(&path_buf, LAN_BLOCK_SIZE, false)
         .await.map_err(|e| e.to_string())?;
     metadata.nonce_prefix = nonce_prefix;
 
@@ -1642,7 +1724,7 @@ async fn send_file_direct_tcp(
     // Encryption (ChaCha20-Poly1305 on 4 MB blocks) is CPU-bound work.
     // By doing it here, the async loop only does network I/O — no CPU stalls.
     // Channel carries (wire_frame, plaintext_len) so the async side can track progress.
-    let (data_tx, mut data_rx) = tokio::sync::mpsc::channel::<(bytes::Bytes, usize)>(32);
+    let (data_tx, mut data_rx) = tokio::sync::mpsc::channel::<(bytes::Bytes, usize)>(CHANNEL_CAPACITY);
     let path_buf_reader = path_buf.clone();
     let enc_key_reader = enc_key;
     let nonce_prefix_reader = nonce_prefix;
@@ -1700,36 +1782,77 @@ async fn send_file_direct_tcp(
     let mut current_speed: f64 = 0.0;
     let mut last_progress = std::time::Instant::now();
     let total_size = metadata.file_size;
-    // Async loop: just dequeue pre-encrypted frames and write to TCP — zero CPU work.
-    while let Some((wire_frame, plain_len)) = data_rx.recv().await {
-        p2ptransfer_core::network::tcp::send_message(&mut stream, &wire_frame)
-            .await.map_err(|e| e.to_string())?;
 
-        bytes_sent += plain_len as u64;
-        window_bytes += plain_len as u64;
+    // Retrieve the pause/cancel flag registered by send_to_contact() for this request.
+    // The flag already lives in TRANSFER_PAUSE_FLAGS; we look it up rather than creating
+    // a new one so UI pause/cancel commands reach this inner loop correctly.
+    let send_pause_flag = protocol::TRANSFER_PAUSE_FLAGS.get(&request_id).map(|f| f.clone());
 
-        let elapsed = window_start.elapsed();
-        if elapsed.as_secs_f64() >= 0.5 {
-            current_speed = window_bytes as f64 / elapsed.as_secs_f64();
-            window_bytes = 0;
-            window_start = std::time::Instant::now();
-        }
-
-        if last_progress.elapsed() > std::time::Duration::from_millis(50) {
-            if let Some(mut state) = protocol::ACTIVE_TRANSFERS.get_mut(&request_id) {
-                state.bytes_transferred = bytes_sent;
+    // Async loop: dequeue pre-encrypted frames from the blocking reader task,
+    // check pause/cancel before every chunk, and send over TCP.
+    let send_result: Result<(), String> = async {
+        loop {
+            // Honor pause before touching the next chunk
+            if let Some(flag) = &send_pause_flag {
+                if flag.wait_if_paused().await {
+                    return Err("Transfer cancelled by user".to_string());
+                }
             }
-            let _ = app_handle.emit_all(
-                "send-progress",
-                protocol::TransferProgressEvent {
-                    request_id: request_id.clone(),
-                    bytes_transferred: bytes_sent,
-                    total: total_size,
-                    speed_bytes_per_sec: current_speed,
-                },
-            );
-            last_progress = std::time::Instant::now();
+
+            // Dequeue next chunk — cancel-interruptible via select!
+            let next = if let Some(flag) = &send_pause_flag {
+                tokio::select! {
+                    biased;
+                    _ = flag.wait_for_cancel() => return Err("Transfer cancelled by user".to_string()),
+                    item = data_rx.recv() => item,
+                }
+            } else {
+                data_rx.recv().await
+            };
+
+            let (wire_frame, plain_len) = match next {
+                Some(x) => x,
+                None => break, // reader finished all blocks
+            };
+
+            p2ptransfer_core::network::tcp::send_message(&mut stream, &wire_frame)
+                .await.map_err(|e| e.to_string())?;
+
+            bytes_sent += plain_len as u64;
+            window_bytes += plain_len as u64;
+
+            let elapsed = window_start.elapsed();
+            if elapsed.as_secs_f64() >= 0.5 {
+                current_speed = window_bytes as f64 / elapsed.as_secs_f64();
+                window_bytes = 0;
+                window_start = std::time::Instant::now();
+            }
+
+            if last_progress.elapsed() > std::time::Duration::from_millis(50) {
+                if let Some(mut state) = protocol::ACTIVE_TRANSFERS.get_mut(&request_id) {
+                    state.bytes_transferred = bytes_sent;
+                }
+                let _ = app_handle.emit_all(
+                    "send-progress",
+                    protocol::TransferProgressEvent {
+                        request_id: request_id.clone(),
+                        bytes_transferred: bytes_sent,
+                        total: total_size,
+                        speed_bytes_per_sec: current_speed,
+                    },
+                );
+                last_progress = std::time::Instant::now();
+            }
         }
+        Ok(())
+    }.await;
+
+    if let Err(cancel_msg) = send_result {
+        let mut err_frame = vec![TAG_ERROR];
+        err_frame.extend_from_slice(cancel_msg.as_bytes());
+        let _ = p2ptransfer_core::network::tcp::send_message(&mut stream, &err_frame).await;
+        let _ = app_handle.emit_all("transfer-cancelled", ());
+        return Err(cancel_msg);
     }
 
     let final_hash = reader_task.await

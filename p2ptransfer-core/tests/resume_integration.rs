@@ -22,7 +22,7 @@ async fn test_engine_resume_after_crash() {
     }
 
     let engine = TransferEngine::new(4);
-    let meta = engine.create_metadata(&src_path, chunk_size).await.unwrap();
+    let meta = engine.create_metadata(&src_path, 512, false).await.unwrap();
     assert_eq!(meta.file_size, total_size);
 
     // Phase 1: Send first half of chunks, then "crash"
@@ -98,7 +98,7 @@ async fn test_sqlite_resume_roundtrip() {
     }
 
     let engine = TransferEngine::new(4);
-    let meta = engine.create_metadata(&src_path, 256 * 1024).await.unwrap();
+    let meta = engine.create_metadata(&src_path, 512, false).await.unwrap();
     let chunk_size = meta.chunk_size; // Use the clamped chunk size from metadata
 
     // Phase 1: Send some chunks and record progress
@@ -189,7 +189,7 @@ async fn test_resume_with_empty_chunks() {
     std::fs::write(&src_path, b"").unwrap();
 
     let engine = TransferEngine::new(4);
-    let meta = engine.create_metadata(&src_path, 512 * 1024).await.unwrap();
+    let meta = engine.create_metadata(&src_path, 512, false).await.unwrap();
 
     // Send the single (empty) chunk
     let data = engine.prepare_chunk(&src_path, &meta, 0).await.unwrap();

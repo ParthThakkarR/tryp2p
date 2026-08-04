@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../main.dart';
 import 'peer_discovery_service.dart';
 import 'settings_page.dart';
 import 'transfer_service.dart';
 import 'contacts_service.dart';
 import 'widgets/device_key_card.dart';
+import 'rust/api.dart' as rust_api;
 
 class SendPage extends StatefulWidget {
   const SendPage({super.key});
@@ -24,14 +27,15 @@ class _SendPageState extends State<SendPage> {
 
   // Target selection
   final _keyController = TextEditingController();
-  String? _selectedPeerKey;   // normalised key (no dash, uppercase)
+  String? _selectedPeerKey; // normalised key (no dash, uppercase)
   String? _selectedPeerName;
-  String? _resolvedIp;
-  int _resolvedPort = 9877;
 
   // Discovery
   final PeerDiscoveryService _discoveryService = PeerDiscoveryService();
   List<DiscoveredPeer> _discoveredPeers = [];
+  // Online status: normalised key → true/false (LAN + WAN)
+  final Map<String, bool> _onlineStatus = {};
+  Timer? _wanPingTimer;
   bool _isScanning = false;
   bool _showManualKey = false;
 
@@ -41,6 +45,7 @@ class _SendPageState extends State<SendPage> {
   String _sendStatus = '';
   bool _sendDone = false;
   bool _sendError = false;
+  bool _isPaused = false;
   StreamSubscription<TransferProgress>? _progressSub;
 
   // After success: offer to save contact
@@ -51,22 +56,59 @@ class _SendPageState extends State<SendPage> {
   void initState() {
     super.initState();
     _startPeerScan();
+    _startWanPing();
   }
 
   void _startPeerScan() async {
     setState(() => _isScanning = true);
     await _discoveryService.startDiscovery();
     _discoveryService.peersStream.listen((peers) {
-      if (mounted) setState(() { _discoveredPeers = peers; _isScanning = false; });
+      if (mounted) {
+        setState(() {
+          _discoveredPeers = peers;
+          _isScanning = false;
+          for (final p in peers) {
+            if (p.deviceId != null) {
+              _onlineStatus[
+                  p.deviceId!.replaceAll('-', '').toUpperCase()] = true;
+            }
+          }
+        });
+      }
     });
     Future.delayed(const Duration(seconds: 5), () {
-      if (mounted) setState(() => _isScanning = false);
+      if (mounted) {
+        setState(() => _isScanning = false);
+      }
     });
+  }
+
+  void _startWanPing() {
+    _runWanPing();
+    _wanPingTimer =
+        Timer.periodic(const Duration(seconds: 15), (_) => _runWanPing());
+  }
+
+  Future<void> _runWanPing() async {
+    for (final c in ContactsService.instance.contacts) {
+      final rawKey = c.deviceKey.replaceAll('-', '').toUpperCase();
+      try {
+        final online = await rust_api.checkPeerOnline(shortId: rawKey);
+        if (mounted) setState(() => _onlineStatus[rawKey] = online);
+      } catch (_) {}
+    }
+  }
+
+  bool _isPeerOnline(String deviceKey) {
+    return _onlineStatus[
+            deviceKey.replaceAll('-', '').toUpperCase()] ??
+        false;
   }
 
   @override
   void dispose() {
     _discoveryService.dispose();
+    _wanPingTimer?.cancel();
     _keyController.dispose();
     _contactNameController.dispose();
     _progressSub?.cancel();
@@ -75,16 +117,55 @@ class _SendPageState extends State<SendPage> {
 
   // ── File picking ─────────────────────────────────────────────────────────
   Future<void> _pickFile() async {
-    final result = await FilePicker.platform.pickFiles();
-    if (result != null) {
-      final file = result.files.single;
-      setState(() { _filePath = file.path; _fileName = file.name; _fileSize = file.size; });
+    final result = await FilePicker.platform.pickFiles(
+      allowCompression: false,
+      withData: false,
+    );
+    if (result == null) return;
+    final file = result.files.single;
+
+    String? resolvedPath = file.path;
+
+    // On Android 11+, file.path can be null (content:// URI).
+    // Workaround: read bytes via FilePicker and write to a temp file.
+    if (resolvedPath == null) {
+      try {
+        setState(() => _sendStatus = 'Preparing file…');
+        // Re-pick with data to get bytes
+        final resultWithData = await FilePicker.platform.pickFiles(
+          allowCompression: false,
+          withData: true,
+        );
+        if (resultWithData == null) return;
+        final fileWithData = resultWithData.files.single;
+        if (fileWithData.bytes == null) {
+          _showSnack(
+              'Cannot read this file. Try picking from Files app instead.',
+              isError: true);
+          return;
+        }
+        final tmpDir = await getTemporaryDirectory();
+        final tmpFile = File(
+            '${tmpDir.path}/${fileWithData.name}');
+        await tmpFile.writeAsBytes(fileWithData.bytes!);
+        resolvedPath = tmpFile.path;
+      } catch (e) {
+        _showSnack('Failed to prepare file: $e', isError: true);
+        return;
+      }
     }
+
+    setState(() {
+      _filePath = resolvedPath;
+      _fileName = file.name;
+      _fileSize = file.size;
+    });
   }
 
   // ── Key / target resolution ───────────────────────────────────────────────
-  String get _rawKey =>
-      (_selectedPeerKey ?? _keyController.text.replaceAll('-', '').toUpperCase()).toUpperCase();
+  String get _rawKey => (_selectedPeerKey ??
+          _keyController.text.replaceAll('-', '').toUpperCase())
+      .toUpperCase();
 
   bool get _hasValidKey => _rawKey.length == 8;
 
@@ -94,40 +175,13 @@ class _SendPageState extends State<SendPage> {
     return c;
   }
 
-  /// Try to find IP: LAN discovery first, then contacts service.
-  bool _resolveTarget() {
-    final raw = _rawKey;
-    // 1. LAN discovery
-    final peer = _discoveryService.resolveKey(raw);
-    if (peer != null) {
-      _resolvedIp = peer.address;
-      _resolvedPort = peer.port;
-      _selectedPeerName ??= peer.deviceName;
-      return true;
-    }
-    // 2. Saved contacts (last-known IP)
-    final contact = ContactsService.instance.findByKey(raw);
-    if (contact != null && contact.lastIp != null) {
-      _resolvedIp = contact.lastIp;
-      _resolvedPort = contact.lastPort;
-      _selectedPeerName ??= contact.name;
-      return true;
-    }
-    return false;
-  }
+  /// No manual resolution needed: handled by unified ALPN.
 
   // ── Send ─────────────────────────────────────────────────────────────────
-  Future<void> _sendTransfer() async {
-    if (_filePath == null || !_hasValidKey) return;
 
-    if (!_resolveTarget()) {
-      _showSnack(
-        'Device not found on LAN and not in contacts.\n'
-        'Make sure both devices are on the same Wi-Fi and the receiver is open.',
-        isError: true,
-      );
-      return;
-    }
+  Future<void> _sendTransfer() async {
+    if (_filePath == null) return;
+    if (!_hasValidKey) return;
 
     setState(() {
       _sending = true;
@@ -139,11 +193,12 @@ class _SendPageState extends State<SendPage> {
     });
 
     _progressSub?.cancel();
-    _progressSub = TransferService.instance.sendFile(
-      peerIp: _resolvedIp!,
-      peerPort: _resolvedPort,
+    _progressSub = TransferService.instance
+        .sendFile(
+      peerShortId: _rawKey,
       filePath: _filePath!,
-    ).listen(
+    )
+        .listen(
       (p) {
         if (!mounted) return;
         setState(() {
@@ -151,17 +206,32 @@ class _SendPageState extends State<SendPage> {
           if (p.isDone) {
             _sendStatus = 'Complete ✓';
             _sendDone = true;
-            _offerSaveContact = ContactsService.instance.findByKey(_rawKey) == null;
+            _offerSaveContact =
+                ContactsService.instance.findByKey(_rawKey) == null;
           } else if (p.isError) {
             _sendStatus = 'Error: ${p.errorMessage}';
             _sendError = true;
+          } else if (p.status != null) {
+            if (p.status == 'accepted') {
+              _sendStatus = 'Waiting for accept…';
+            } else if (p.status == 'transferring') {
+              _sendStatus = 'Uploading…';
+            } else {
+              _sendStatus = p.status!;
+            }
           } else {
-            _sendStatus = '${(_sendProgress * 100).toInt()}%  •  ${p.speedLabel}';
+            _sendStatus =
+                '${(_sendProgress * 100).toInt()}%  •  ${p.speedLabel}';
           }
         });
       },
       onError: (e) {
-        if (mounted) setState(() { _sendError = true; _sendStatus = 'Error: $e'; });
+        if (mounted) {
+          setState(() {
+            _sendError = true;
+            _sendStatus = 'Error: $e';
+          });
+        }
       },
     );
   }
@@ -172,8 +242,6 @@ class _SendPageState extends State<SendPage> {
     await ContactsService.instance.addOrUpdate(Contact(
       deviceKey: _formatDisplayKey(_rawKey),
       name: name,
-      lastIp: _resolvedIp,
-      lastPort: _resolvedPort,
     ));
     setState(() => _offerSaveContact = false);
     _showSnack('$name saved to contacts!');
@@ -184,10 +252,34 @@ class _SendPageState extends State<SendPage> {
     setState(() {
       _sending = false;
       _sendProgress = 0;
-      _sendStatus = '';
-      _sendDone = false;
-      _sendError = false;
+      _isPaused = false;
       _offerSaveContact = false;
+    });
+  }
+
+  Future<void> _togglePause() async {
+    final reqId = TransferService.instance.activeOutgoingRequestId;
+    if (reqId == null) return;
+    if (_isPaused) {
+      await TransferService.instance.resumeTransfer(reqId);
+      setState(() => _isPaused = false);
+    } else {
+      await TransferService.instance.pauseTransfer(reqId);
+      setState(() => _isPaused = true);
+    }
+  }
+
+  Future<void> _cancelTransfer() async {
+    final reqId = TransferService.instance.activeOutgoingRequestId;
+    if (reqId != null) {
+      await TransferService.instance.cancelTransfer(reqId);
+    }
+    _progressSub?.cancel();
+    setState(() {
+      _sending = false;
+      _sendProgress = 0;
+      _isPaused = false;
+      _sendStatus = 'Cancelled';
     });
   }
 
@@ -203,7 +295,9 @@ class _SendPageState extends State<SendPage> {
   String _formatFileSize(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
@@ -219,7 +313,8 @@ class _SendPageState extends State<SendPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.pushNamed(context, '/settings').then((_) => setState(() {})),
+            onPressed: () => Navigator.pushNamed(context, '/settings')
+                .then((_) => setState(() {})),
             tooltip: 'Settings',
           ),
         ],
@@ -232,7 +327,7 @@ class _SendPageState extends State<SendPage> {
             // My key
             DeviceKeyCard(
               deviceId: deviceIdentity.deviceId,
-              fullKeyHex: deviceIdentity.fullKeyHex,
+              
               compact: true,
             ),
             const SizedBox(height: 20),
@@ -240,7 +335,8 @@ class _SendPageState extends State<SendPage> {
             // ── File selection ──────────────────────────────────────────
             if (!_sending) ...[
               Text('Select File',
-                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               _FileCard(
                 filePath: _filePath,
@@ -248,7 +344,11 @@ class _SendPageState extends State<SendPage> {
                 fileSize: _fileSize,
                 formatSize: _formatFileSize,
                 onPick: _pickFile,
-                onClear: () => setState(() { _filePath = null; _fileName = null; _fileSize = null; }),
+                onClear: () => setState(() {
+                  _filePath = null;
+                  _fileName = null;
+                  _fileSize = null;
+                }),
               ),
               const SizedBox(height: 24),
 
@@ -257,12 +357,19 @@ class _SendPageState extends State<SendPage> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text('Target Device',
-                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
+                      style: theme.textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w600)),
                   if (_isScanning)
-                    const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
                   else
                     TextButton.icon(
-                      onPressed: () { _discoveredPeers.clear(); _startPeerScan(); },
+                      onPressed: () {
+                        _discoveredPeers.clear();
+                        _startPeerScan();
+                      },
                       icon: const Icon(Icons.refresh, size: 16),
                       label: const Text('Scan'),
                     ),
@@ -283,9 +390,9 @@ class _SendPageState extends State<SendPage> {
                 const SizedBox(height: 12),
               ],
 
-              // LAN discovered peers
+              // LAN/WAN discovered peers
               if (_discoveredPeers.isNotEmpty) ...[
-                Text('Nearby on LAN',
+                Text('Nearby Devices',
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: cs.onSurface.withValues(alpha: 0.5),
                     )),
@@ -293,15 +400,22 @@ class _SendPageState extends State<SendPage> {
                 ..._discoveredPeers.map((p) => _buildPeerTile(p, theme, cs)),
               ],
 
-              if (_discoveredPeers.isEmpty && ContactsService.instance.contacts.isEmpty && !_isScanning)
+              if (_discoveredPeers.isEmpty &&
+                  ContactsService.instance.contacts.isEmpty &&
+                  !_isScanning)
                 _EmptyLanCard(theme: theme, cs: cs),
 
               // Manual key entry
               const SizedBox(height: 8),
               TextButton.icon(
-                onPressed: () => setState(() => _showManualKey = !_showManualKey),
-                icon: Icon(_showManualKey ? Icons.expand_less : Icons.expand_more, size: 18),
-                label: Text(_showManualKey ? 'Hide key entry' : 'Enter device key manually'),
+                onPressed: () =>
+                    setState(() => _showManualKey = !_showManualKey),
+                icon: Icon(
+                    _showManualKey ? Icons.expand_less : Icons.expand_more,
+                    size: 18),
+                label: Text(_showManualKey
+                    ? 'Hide key entry'
+                    : 'Enter device key manually'),
               ),
 
               if (_showManualKey) ...[
@@ -320,8 +434,9 @@ class _SendPageState extends State<SendPage> {
                 if (_keyController.text.isNotEmpty && !_hasValidKey)
                   Padding(
                     padding: const EdgeInsets.only(left: 16, top: 4),
-                    child: Text('Key must be 8 hex characters (e.g. A3F8-K2D1)',
-                        style: theme.textTheme.bodySmall?.copyWith(color: cs.error)),
+                    child: Text('Key must be 8 hex characters (e.g. A3F8-C2D1)',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: cs.error)),
                   ),
               ],
 
@@ -329,14 +444,16 @@ class _SendPageState extends State<SendPage> {
               if (_hasValidKey) ...[
                 const SizedBox(height: 12),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(
                     color: cs.primaryContainer.withValues(alpha: 0.4),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.check_circle_outline, size: 18, color: cs.primary),
+                      Icon(Icons.check_circle_outline,
+                          size: 18, color: cs.primary),
                       const SizedBox(width: 8),
                       Text('Sending to: ',
                           style: theme.textTheme.bodySmall?.copyWith(
@@ -362,7 +479,8 @@ class _SendPageState extends State<SendPage> {
               // Compression info
               Row(
                 children: [
-                  Icon(Icons.speed, size: 16, color: cs.onSurface.withValues(alpha: 0.4)),
+                  Icon(Icons.speed,
+                      size: 16, color: cs.onSurface.withValues(alpha: 0.4)),
                   const SizedBox(width: 6),
                   Text('Compression: Level ${AppSettings.compressionLevel}',
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -375,13 +493,17 @@ class _SendPageState extends State<SendPage> {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: (_filePath != null && _hasValidKey) ? _sendTransfer : null,
+                  onPressed: (_filePath != null && _hasValidKey)
+                      ? _sendTransfer
+                      : null,
                   icon: const Icon(Icons.send_rounded),
                   label: const Text('Send File',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
                   ),
                 ),
               ),
@@ -396,20 +518,27 @@ class _SendPageState extends State<SendPage> {
                 statusLabel: _sendStatus,
                 isDone: _sendDone,
                 isError: _sendError,
+                isPaused: _isPaused,
                 formatSize: _formatFileSize,
                 onReset: _resetSend,
+                onTogglePause: (_sendDone || _sendError) ? null : _togglePause,
+                onCancel: (_sendDone || _sendError) ? null : _cancelTransfer,
                 theme: theme,
                 cs: cs,
               ),
 
+              // Removed WAN ticket block
+
               // Save contact offer
               if (_offerSaveContact && _sendDone) ...[
+
                 const SizedBox(height: 16),
                 Card(
                   elevation: 0,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
-                    side: BorderSide(color: cs.primary.withValues(alpha: 0.3), width: 1),
+                    side: BorderSide(
+                        color: cs.primary.withValues(alpha: 0.3), width: 1),
                   ),
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -417,7 +546,8 @@ class _SendPageState extends State<SendPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text('Save as contact?',
-                            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
+                            style: theme.textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w600)),
                         const SizedBox(height: 8),
                         Row(
                           children: [
@@ -453,6 +583,7 @@ class _SendPageState extends State<SendPage> {
   Widget _buildContactTile(Contact c, ThemeData theme, ColorScheme cs) {
     final key = c.deviceKey.replaceAll('-', '').toUpperCase();
     final isSelected = _selectedPeerKey == key;
+    final online = _isPeerOnline(c.deviceKey);
     return Card(
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 6),
@@ -468,8 +599,6 @@ class _SendPageState extends State<SendPage> {
         onTap: () => setState(() {
           _selectedPeerKey = key;
           _selectedPeerName = c.name;
-          _resolvedIp = c.lastIp;
-          _resolvedPort = c.lastPort;
           _keyController.clear();
           _showManualKey = false;
         }),
@@ -477,18 +606,57 @@ class _SendPageState extends State<SendPage> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Row(
             children: [
-              CircleAvatar(
-                radius: 18,
-                backgroundColor: cs.secondaryContainer,
-                child: Icon(Icons.person, color: cs.secondary, size: 18),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundColor: cs.secondaryContainer,
+                    child: Icon(Icons.person, color: cs.secondary, size: 18),
+                  ),
+                  // Online/offline dot
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
+                      width: 11,
+                      height: 11,
+                      decoration: BoxDecoration(
+                        color: online
+                            ? Colors.green
+                            : cs.onSurface.withValues(alpha: 0.25),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: theme.scaffoldBackgroundColor,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(c.name,
-                        style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                    Row(
+                      children: [
+                        Text(c.name,
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(fontWeight: FontWeight.w600)),
+                        const SizedBox(width: 6),
+                        Text(
+                          online ? 'Online' : 'Offline',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: online
+                                ? Colors.green
+                                : cs.onSurface.withValues(alpha: 0.4),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
                     Text(c.deviceKey,
                         style: theme.textTheme.bodySmall?.copyWith(
                           fontFamily: 'monospace',
@@ -502,7 +670,8 @@ class _SendPageState extends State<SendPage> {
               if (isSelected)
                 Icon(Icons.check_circle, color: cs.primary, size: 22)
               else
-                Icon(Icons.chevron_right, color: cs.onSurface.withValues(alpha: 0.3)),
+                Icon(Icons.chevron_right,
+                    color: cs.onSurface.withValues(alpha: 0.3)),
             ],
           ),
         ),
@@ -511,7 +680,8 @@ class _SendPageState extends State<SendPage> {
   }
 
   Widget _buildPeerTile(DiscoveredPeer peer, ThemeData theme, ColorScheme cs) {
-    final peerKey = peer.deviceId?.replaceAll('-', '').toUpperCase() ?? peer.fullAddress;
+    final peerKey =
+        peer.deviceId?.replaceAll('-', '').toUpperCase() ?? peer.fullAddress;
     final displayKey = peer.deviceId ?? peer.fullAddress;
     final isSelected = _selectedPeerKey == peerKey;
 
@@ -530,8 +700,6 @@ class _SendPageState extends State<SendPage> {
         onTap: () => setState(() {
           _selectedPeerKey = peerKey;
           _selectedPeerName = peer.deviceName;
-          _resolvedIp = peer.address;
-          _resolvedPort = peer.port;
           _keyController.clear();
           _showManualKey = false;
         }),
@@ -539,25 +707,59 @@ class _SendPageState extends State<SendPage> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Row(
             children: [
-              CircleAvatar(
-                radius: 18,
-                backgroundColor: cs.primaryContainer,
-                child: Icon(
-                  peer.deviceName.toLowerCase().contains('phone') ||
-                          peer.deviceName.toLowerCase().contains('mobile')
-                      ? Icons.smartphone
-                      : Icons.laptop,
-                  color: cs.primary,
-                  size: 18,
-                ),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundColor: cs.primaryContainer,
+                    child: Icon(
+                      peer.deviceName.toLowerCase().contains('phone') ||
+                              peer.deviceName.toLowerCase().contains('mobile')
+                          ? Icons.smartphone
+                          : Icons.laptop,
+                      color: cs.primary,
+                      size: 18,
+                    ),
+                  ),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
+                      width: 11,
+                      height: 11,
+                      decoration: BoxDecoration(
+                        color: Colors.green,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: theme.scaffoldBackgroundColor,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(peer.deviceName,
-                        style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                    Row(
+                      children: [
+                        Text(peer.deviceName,
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(fontWeight: FontWeight.w600)),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Online',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: Colors.green,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
                     Text(displayKey,
                         style: theme.textTheme.bodySmall?.copyWith(
                           fontFamily: 'monospace',
@@ -571,7 +773,8 @@ class _SendPageState extends State<SendPage> {
               if (isSelected)
                 Icon(Icons.check_circle, color: cs.primary, size: 22)
               else
-                Icon(Icons.chevron_right, color: cs.onSurface.withValues(alpha: 0.3)),
+                Icon(Icons.chevron_right,
+                    color: cs.onSurface.withValues(alpha: 0.3)),
             ],
           ),
         ),
@@ -667,10 +870,16 @@ class _KeyEntryCard extends StatelessWidget {
   final ThemeData theme;
   final ValueChanged<String> onChanged;
   const _KeyEntryCard(
-      {required this.controller, required this.cs, required this.theme, required this.onChanged});
+      {required this.controller,
+      required this.cs,
+      required this.theme,
+      required this.onChanged});
 
   String _format(String raw) {
-    final c = raw.replaceAll('-', '').toUpperCase().replaceAll(RegExp(r'[^A-F0-9]'), '');
+    final c = raw
+        .replaceAll('-', '')
+        .toUpperCase()
+        .replaceAll(RegExp(r'[^A-F0-9]'), '');
     final clamped = c.length > 8 ? c.substring(0, 8) : c;
     if (clamped.length <= 4) return clamped;
     return '${clamped.substring(0, 4)}-${clamped.substring(4)}';
@@ -713,7 +922,7 @@ class _KeyEntryCard extends StatelessWidget {
                 },
                 decoration: InputDecoration(
                   labelText: "Receiver's Device Key",
-                  hintText: 'A3F8-K2D1',
+                  hintText: 'A3F8-C2D1',
                   border: InputBorder.none,
                   isDense: true,
                   contentPadding: EdgeInsets.zero,
@@ -767,17 +976,18 @@ class _EmptyLanCard extends StatelessWidget {
         child: Center(
           child: Column(
             children: [
-              Icon(Icons.wifi_find, size: 40, color: cs.onSurface.withValues(alpha: 0.2)),
+              Icon(Icons.wifi_find,
+                  size: 40, color: cs.onSurface.withValues(alpha: 0.2)),
               const SizedBox(height: 8),
               Text('No nearby devices found',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                      color: cs.onSurface.withValues(alpha: 0.5))),
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: cs.onSurface.withValues(alpha: 0.5))),
               const SizedBox(height: 4),
               Text(
-                'Ensure both devices are on the same Wi-Fi\nor enter the receiver\'s key manually below.',
+                'No devices found on LAN. You can still send\nover the internet — just enter the receiver\'s key below.',
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                    color: cs.onSurface.withValues(alpha: 0.35)),
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: cs.onSurface.withValues(alpha: 0.35)),
               ),
             ],
           ),
@@ -792,9 +1002,11 @@ class _TransferProgressCard extends StatelessWidget {
   final int fileSize;
   final double progress;
   final String statusLabel;
-  final bool isDone, isError;
+  final bool isDone, isError, isPaused;
   final String Function(int) formatSize;
   final VoidCallback onReset;
+  final Future<void> Function()? onTogglePause;
+  final Future<void> Function()? onCancel;
   final ThemeData theme;
   final ColorScheme cs;
 
@@ -805,14 +1017,18 @@ class _TransferProgressCard extends StatelessWidget {
     required this.statusLabel,
     required this.isDone,
     required this.isError,
+    this.isPaused = false,
     required this.formatSize,
     required this.onReset,
+    this.onTogglePause,
+    this.onCancel,
     required this.theme,
     required this.cs,
   });
 
   @override
   Widget build(BuildContext context) {
+    final isActive = !isDone && !isError;
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -822,8 +1038,10 @@ class _TransferProgressCard extends StatelessWidget {
               ? Colors.green.withValues(alpha: 0.4)
               : isError
                   ? cs.error.withValues(alpha: 0.4)
-                  : theme.dividerColor,
-          width: isDone || isError ? 1.5 : 0.5,
+                  : isPaused
+                      ? Colors.orange.withValues(alpha: 0.4)
+                      : theme.dividerColor,
+          width: isDone || isError || isPaused ? 1.5 : 0.5,
         ),
       ),
       child: Padding(
@@ -834,8 +1052,20 @@ class _TransferProgressCard extends StatelessWidget {
             Row(
               children: [
                 Icon(
-                  isDone ? Icons.check_circle : isError ? Icons.error : Icons.upload_rounded,
-                  color: isDone ? Colors.green : isError ? cs.error : cs.primary,
+                  isDone
+                      ? Icons.check_circle
+                      : isError
+                          ? Icons.error
+                          : isPaused
+                              ? Icons.pause_circle_filled
+                              : Icons.upload_rounded,
+                  color: isDone
+                      ? Colors.green
+                      : isError
+                          ? cs.error
+                          : isPaused
+                              ? Colors.orange
+                              : cs.primary,
                   size: 28,
                 ),
                 const SizedBox(width: 12),
@@ -844,8 +1074,15 @@ class _TransferProgressCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        isDone ? 'Transfer Complete' : isError ? 'Transfer Failed' : 'Sending…',
-                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                        isDone
+                            ? 'Transfer Complete'
+                            : isError
+                                ? 'Transfer Failed'
+                                : isPaused
+                                    ? 'Paused'
+                                    : 'Sending…',
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.bold),
                       ),
                       Text(
                         '$fileName  •  ${fileSize > 0 ? formatSize(fileSize) : ""}',
@@ -860,20 +1097,58 @@ class _TransferProgressCard extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             LinearProgressIndicator(
-              value: isDone ? 1.0 : isError ? 0 : (progress > 0 ? progress : null),
+              value: isDone
+                  ? 1.0
+                  : isError
+                      ? 0
+                      : (progress > 0 ? progress : null),
               minHeight: 8,
               borderRadius: BorderRadius.circular(4),
-              color: isDone ? Colors.green : isError ? cs.error : null,
+              color: isDone
+                  ? Colors.green
+                  : isError
+                      ? cs.error
+                      : isPaused
+                          ? Colors.orange
+                          : null,
             ),
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(statusLabel,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: isDone ? Colors.green : isError ? cs.error : null,
-                      fontWeight: FontWeight.w600,
-                    )),
+                Expanded(
+                  child: Text(statusLabel,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: isDone
+                            ? Colors.green
+                            : isError
+                                ? cs.error
+                                : null,
+                        fontWeight: FontWeight.w600,
+                      )),
+                ),
+                if (isActive && onTogglePause != null)
+                  TextButton.icon(
+                    onPressed: onTogglePause,
+                    icon: Icon(isPaused ? Icons.play_arrow : Icons.pause, size: 16),
+                    label: Text(isPaused ? 'Resume' : 'Pause'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: isPaused ? cs.primary : cs.onSurface.withValues(alpha: 0.6),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                if (isActive && onCancel != null)
+                  TextButton.icon(
+                    onPressed: onCancel,
+                    icon: const Icon(Icons.close, size: 16),
+                    label: const Text('Cancel'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: cs.error,
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
                 if (isDone || isError)
                   TextButton(
                     onPressed: onReset,
@@ -887,3 +1162,4 @@ class _TransferProgressCard extends StatelessWidget {
     );
   }
 }
+

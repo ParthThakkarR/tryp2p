@@ -27,15 +27,12 @@ class HomePage extends StatelessWidget {
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 const SizedBox(height: 8),
-
                 DeviceKeyCard(
                   deviceId: deviceIdentity.deviceId,
-                  fullKeyHex: deviceIdentity.fullKeyHex,
+                  
                   deviceName: 'Mobile Device',
                 ),
-
                 const SizedBox(height: 24),
-
                 Text(
                   'Quick Actions',
                   style: theme.textTheme.titleMedium?.copyWith(
@@ -43,11 +40,8 @@ class HomePage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-
                 _ActionGrid(),
-
                 const SizedBox(height: 24),
-
                 Text(
                   'Status',
                   style: theme.textTheme.titleMedium?.copyWith(
@@ -105,6 +99,15 @@ class _ActionGrid extends StatelessWidget {
               color: colorScheme.secondary,
               iconBgColor: colorScheme.secondaryContainer,
               onTap: () => Navigator.pushNamed(context, '/history'),
+            ),
+            _ActionTile(
+              width: itemWidth,
+              icon: Icons.contacts_rounded,
+              label: 'Contacts',
+              subtitle: 'Manage peers',
+              color: colorScheme.error,
+              iconBgColor: colorScheme.errorContainer,
+              onTap: () => Navigator.pushNamed(context, '/contacts'),
             ),
             _ActionTile(
               width: itemWidth,
@@ -218,7 +221,8 @@ class _StatusCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            Icon(Icons.wifi, size: 20, color: colorScheme.onSurface.withValues(alpha: 0.6)),
+            Icon(Icons.wifi,
+                size: 20, color: colorScheme.onSurface.withValues(alpha: 0.6)),
             const SizedBox(width: 8),
             Expanded(
               child: Text(

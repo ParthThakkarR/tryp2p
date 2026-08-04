@@ -30,7 +30,8 @@ class Contact {
         name: j['name'] as String,
         lastIp: j['ip'] as String?,
         lastPort: (j['port'] as num?)?.toInt() ?? 9877,
-        addedAt: DateTime.tryParse(j['added'] as String? ?? '') ?? DateTime.now(),
+        addedAt:
+            DateTime.tryParse(j['added'] as String? ?? '') ?? DateTime.now(),
       );
 
   Contact copyWithIp(String ip, int port) => Contact(
@@ -57,9 +58,8 @@ class ContactsService {
     final raw = prefs.getString(_key);
     if (raw == null) return;
     final list = jsonDecode(raw) as List<dynamic>;
-    _contacts = list
-        .map((e) => Contact.fromJson(e as Map<String, dynamic>))
-        .toList();
+    _contacts =
+        list.map((e) => Contact.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<void> save() async {
@@ -72,7 +72,7 @@ class ContactsService {
 
   Future<void> addOrUpdate(Contact c) async {
     final idx = _contacts.indexWhere(
-        (x) => x.deviceKey.toUpperCase() == c.deviceKey.toUpperCase());
+        (x) => x.deviceKey.toLowerCase() == c.deviceKey.toLowerCase());
     if (idx >= 0) {
       _contacts[idx] = c;
     } else {
@@ -83,15 +83,15 @@ class ContactsService {
 
   Future<void> remove(String deviceKey) async {
     _contacts.removeWhere(
-        (c) => c.deviceKey.toUpperCase() == deviceKey.toUpperCase());
+        (c) => c.deviceKey.toLowerCase() == deviceKey.toLowerCase());
     await save();
   }
 
   Contact? findByKey(String key) {
-    final upper = key.toUpperCase().replaceAll('-', '');
+    final lower = key.toLowerCase().replaceAll('-', '');
     try {
       return _contacts.firstWhere(
-        (c) => c.deviceKey.toUpperCase().replaceAll('-', '') == upper,
+        (c) => c.deviceKey.toLowerCase().replaceAll('-', '') == lower,
       );
     } catch (_) {
       return null;
@@ -101,7 +101,7 @@ class ContactsService {
   /// Update last-known IP when a contact is seen on LAN.
   Future<void> updateIp(String deviceKey, String ip, int port) async {
     final idx = _contacts.indexWhere(
-        (c) => c.deviceKey.toUpperCase() == deviceKey.toUpperCase());
+        (c) => c.deviceKey.toLowerCase() == deviceKey.toLowerCase());
     if (idx >= 0) {
       _contacts[idx] = _contacts[idx].copyWithIp(ip, port);
       await save();

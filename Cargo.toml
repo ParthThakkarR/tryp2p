@@ -5,6 +5,7 @@ members = [
     "desktop/p2ptransfer-cli",
     "desktop/p2ptransfer-gui/src-tauri",
     "mobile/p2ptransfer-ffi", "patcher_proj",
+    "mobile/p2ptransfer-flutter/rust",
 ]
 
 [workspace.package]

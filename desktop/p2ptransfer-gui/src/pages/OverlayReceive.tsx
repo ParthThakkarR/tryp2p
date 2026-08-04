@@ -13,7 +13,7 @@ export default function OverlayReceive() {
   const [accepted, setAccepted] = useState(false);
   const [rejected, setRejected] = useState(false);
 
-  const { activeReceiveProgress, receiveSpeed, receiveError, cancelTransfer, isPaused, pauseTransfer, resumeTransfer, wasCancelled, setWasCancelled } = useTransfer();
+  const { activeReceiveProgress, receiveSpeed, receiveError, receiveComplete, cancelTransfer, isPaused, pauseTransfer, resumeTransfer, wasCancelled, setWasCancelled, activeReceiveRequestId } = useTransfer();
 
   // If we can get default download dir
   useState(() => {
@@ -27,6 +27,12 @@ export default function OverlayReceive() {
       appWindow.close();
     }
   }, [wasCancelled]);
+
+  useEffect(() => {
+    if (receiveComplete) {
+      setTimeout(() => appWindow.close(), 1500);
+    }
+  }, [receiveComplete]);
 
   const handleAccept = async () => {
     if (!reqId) return;
@@ -53,13 +59,20 @@ export default function OverlayReceive() {
   };
 
   const togglePause = async () => {
-    if (reqId) {
+    // Prefer the backend-registered request ID over the URL param (TCP path compatibility)
+    const id = activeReceiveRequestId || reqId;
+    if (id) {
       if (isPaused) {
-        await resumeTransfer(reqId);
+        await resumeTransfer(id);
       } else {
-        await pauseTransfer(reqId);
+        await pauseTransfer(id);
       }
     }
+  };
+
+  const handleCancel = async () => {
+    const id = activeReceiveRequestId || reqId;
+    if (id) await cancelTransfer(id);
   };
 
   const pickDir = async () => {
@@ -73,9 +86,9 @@ export default function OverlayReceive() {
     }
   };
 
-  const pct = activeReceiveProgress && activeReceiveProgress.total > 0
+  const pct = receiveComplete ? 100 : (activeReceiveProgress && activeReceiveProgress.total > 0
     ? Math.round((activeReceiveProgress.sent / activeReceiveProgress.total) * 100)
-    : 0;
+    : 0);
 
   return (
     <div className="overlay-window">
@@ -175,7 +188,7 @@ export default function OverlayReceive() {
                       {isPaused ? "Resume" : "Pause"}
                     </button>
                     <button 
-                      onClick={() => cancelTransfer(reqId)} 
+                      onClick={handleCancel} 
                       style={{ background: 'transparent', border: 'none', color: 'var(--ember)', cursor: 'pointer', fontSize: 'var(--text-xs)', textDecoration: 'underline' }}
                     >
                       Cancel

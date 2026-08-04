@@ -34,6 +34,8 @@ pub struct TransferMetadata {
     pub is_resume: bool,
     #[serde(default)]
     pub nonce_prefix: [u8; 4],
+    #[serde(default)]
+    pub force_restart: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +73,7 @@ impl TransferEngine {
         &self,
         path: &Path,
         chunk_size: usize,
+        force_restart: bool,
     ) -> Result<TransferMetadata> {
         let file_size = tokio::fs::metadata(path)
             .await
@@ -104,6 +107,7 @@ impl TransferEngine {
             resume_offset: 0,
             is_resume: false,
             nonce_prefix: [0u8; 4],
+            force_restart,
         })
     }
 
@@ -257,7 +261,7 @@ mod tests {
     async fn test_create_metadata() {
         let (_dir, path) = create_temp_file(1024);
         let engine = TransferEngine::new(4);
-        let meta = engine.create_metadata(&path, MIN_CHUNK_SIZE).await.unwrap();
+        let meta = engine.create_metadata(&path, 512, false).await.unwrap();
 
         assert_eq!(meta.file_size, 1024);
         assert_eq!(meta.file_name, "test_file.bin");
@@ -269,7 +273,7 @@ mod tests {
     async fn test_prepare_chunk() {
         let (_dir, path) = create_temp_file(MIN_CHUNK_SIZE);
         let engine = TransferEngine::new(4);
-        let meta = engine.create_metadata(&path, MIN_CHUNK_SIZE).await.unwrap();
+        let meta = engine.create_metadata(&path, 512, false).await.unwrap();
 
         let chunk0 = engine.prepare_chunk(&path, &meta, 0).await.unwrap();
         assert_eq!(chunk0.len(), MIN_CHUNK_SIZE);
@@ -301,7 +305,7 @@ mod tests {
     async fn test_verify_checksum() {
         let (_dir, path) = create_temp_file(256);
         let engine = TransferEngine::new(4);
-        let meta = engine.create_metadata(&path, 256).await.unwrap();
+        let meta = engine.create_metadata(&path, 512, false).await.unwrap();
 
         let valid = engine.verify_checksum(&path, &meta.checksum).await.unwrap();
         assert!(valid);
@@ -332,7 +336,7 @@ mod tests {
     async fn test_empty_chunk_prepare() {
         let (_dir, path) = create_temp_file(0);
         let engine = TransferEngine::new(4);
-        let meta = engine.create_metadata(&path, 512).await.unwrap();
+        let meta = engine.create_metadata(&path, 512, false).await.unwrap();
 
         let chunk = engine.prepare_chunk(&path, &meta, 0).await.unwrap();
         assert!(chunk.is_empty());

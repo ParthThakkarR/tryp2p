@@ -11,7 +11,7 @@ async fn test_metadata_tcp_roundtrip() {
     std::fs::write(&path, b"hello world").unwrap();
 
     let engine = TransferEngine::new(4);
-    let meta = engine.create_metadata(&path, 512).await.unwrap();
+    let meta = engine.create_metadata(&path, 512, false).await.unwrap();
 
     // Bind listener and spawn echo handler
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -49,7 +49,7 @@ async fn test_listen_handler_accepts_metadata() {
     std::fs::write(&path, b"test data 12345").unwrap();
 
     let engine = TransferEngine::new(4);
-    let meta = engine.create_metadata(&path, 512).await.unwrap();
+    let meta = engine.create_metadata(&path, 512, false).await.unwrap();
 
     // The same closure used in cmd_listen
     let handler: tcp::MessageHandler = Arc::new(move |data, addr| {

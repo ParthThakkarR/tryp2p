@@ -53,7 +53,8 @@ class HistoryPage extends StatelessWidget {
                 icon: const Icon(Icons.send_rounded),
                 label: const Text('Send a File'),
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
